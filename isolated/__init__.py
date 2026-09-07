@@ -27,6 +27,7 @@ from .viewer import plot_cuts, save_cutout_video
 from .periodogram import (
     compute_ls_periodogram, find_periodogram_peaks, save_periodogram, plot_periodogram,
     fit_multi_sine, fit_periodogram_approximation, plot_periodogram_approximation,
+    suggest_period_range,
 )
 from .stray_light import (
     pick_stripe_pixels, stray_light_monitor_curve, plot_stray_light_diagnostics, correct_stray_light,
@@ -48,5 +49,6 @@ __all__ = [
     "plot_cuts", "save_cutout_video",
     "compute_ls_periodogram", "find_periodogram_peaks", "save_periodogram", "plot_periodogram",
     "fit_multi_sine", "fit_periodogram_approximation", "plot_periodogram_approximation",
+    "suggest_period_range",
     "pick_stripe_pixels", "stray_light_monitor_curve", "plot_stray_light_diagnostics", "correct_stray_light",
 ]

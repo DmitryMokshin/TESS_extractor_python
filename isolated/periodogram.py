@@ -28,6 +28,37 @@ from astropy.timeseries import LombScargle
 from .config import STAR_DIRECTORY
 from .geometry import get_nospace_star_name
 from .stats import cleaned_jds_mags
+from .lightcurve_tools import find_sampling
+
+
+def suggest_period_range(mjd, nyquist_factor=2.0, max_period_fraction=1.0):
+    """
+    Suggest a (min_period, max_period) in days for `compute_ls_periodogram`'s
+    `period_range`, from the light curve's own time sampling instead of a
+    fixed guess.
+
+    min_period = nyquist_factor * find_sampling(mjd) -- the *median* cadence
+    (see `lightcurve_tools.find_sampling`), not the minimum gap between
+    points. After cleaning, `np.diff(mjd)` is a mix of the normal cadence
+    and a handful of much larger gaps left behind by excised windows (see
+    `exclude_frame_windows`): the minimum gap is fragile (a single
+    coincidentally-close pair of points sends it towards 0 and the
+    frequency grid towards nonsense), and the *mean* gap is biased upward
+    by the excision gaps. The median stays robust to both, as long as the
+    excised gaps are a minority of all the gaps -- true for a normal
+    handful of excised windows. `nyquist_factor=2` (the default) is the
+    classic Nyquist limit: you need at least 2 samples per cycle to resolve
+    a period at all; raise it for extra margin against timing jitter.
+
+    max_period = max_period_fraction * (mjd.max() - mjd.min()) -- the total
+    time baseline (post-cleaning), since a period you don't see repeat
+    within your observing window isn't trustworthy. Lower it (e.g. 0.5) to
+    require at least 2 full cycles inside the baseline.
+    """
+    mjd = np.asarray(mjd, dtype=float)
+    sampling = find_sampling(mjd)
+    baseline = mjd.max() - mjd.min()
+    return nyquist_factor * sampling, max_period_fraction * baseline
 
 
 def compute_ls_periodogram(df_lc, jd_box=0.1, sigma_tol=10, n_out=20,
