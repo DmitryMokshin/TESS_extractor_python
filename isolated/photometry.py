@@ -57,14 +57,74 @@ def calc_aperture_photometry_bkg_pixels(cut, bkg_positions, star_px_x, star_px_y
     return aperture_sum(cut - bkg_cut, star_px_x, star_px_y, aperture_radius)
 
 
+def _aperture_photometry_bkg_pixels_core(cut, bkg_positions, star_px_x, star_px_y, aperture_radius):
+    """
+    Shared core of `calc_aperture_photometry_bkg_pixels_with_sn_ratio` and
+    `calc_aperture_photometry_with_diagnostics`: the NaN guard, background
+    plane fit and aperture sum/SN they both need. Returns
+    (bkg_cut, cut_nobkg, phot, sn), or None if the NaN guard trips.
+    """
+    if np.any(np.abs(cut) < 1e-8):
+        return None
+    bkg_cut = fit_flat_background(cut, bkg_positions)
+    cut_nobkg = cut - bkg_cut
+    phot = aperture_sum(cut_nobkg, star_px_x, star_px_y, aperture_radius)
+    sn = phot / aperture_sum(bkg_cut, star_px_x, star_px_y, aperture_radius)
+    return bkg_cut, cut_nobkg, phot, sn
+
+
 def calc_aperture_photometry_bkg_pixels_with_sn_ratio(cut, bkg_positions, star_px_x, star_px_y, aperture_radius):
     """Direct port of `calc_aperture_photometry_bkg_pixels_with_sn_ratio`."""
-    if np.any(np.abs(cut) < 1e-8):
+    result = _aperture_photometry_bkg_pixels_core(cut, bkg_positions, star_px_x, star_px_y, aperture_radius)
+    if result is None:
         return np.nan, 0.0
-    bkg_cut = fit_flat_background(cut, bkg_positions)
-    phot = aperture_sum(cut - bkg_cut, star_px_x, star_px_y, aperture_radius)
-    sn = phot / aperture_sum(bkg_cut, star_px_x, star_px_y, aperture_radius)
+    _bkg_cut, _cut_nobkg, phot, sn = result
     return phot, sn
+
+
+def calc_flux_weighted_centroid(cut, star_px_x, star_px_y, aperture_radius):
+    """
+    Flux-weighted centroid (1-based) within a circular aperture: the center
+    of mass of `cut`'s positive flux inside the aperture. Not a Julia port
+    -- a per-frame diagnostic for `data_io.load_light_curve` (ROADMAP.md
+    Этап 1), catching real PSF/pointing drift rather than just the nominal
+    aperture-correction offset (`POS_CORR1/2`).
+
+    Returns (centroid_x, centroid_y), or (nan, nan) if there's no positive
+    flux in the aperture.
+    """
+    cut_width, cut_height = cut.shape
+    xx, yy = np.meshgrid(np.arange(1, cut_width + 1), np.arange(1, cut_height + 1), indexing="ij")
+    in_aperture = (xx - star_px_x) ** 2 + (yy - star_px_y) ** 2 <= aperture_radius ** 2
+    weights = np.where(in_aperture, np.clip(cut, 0.0, None), 0.0)
+    total = weights.sum()
+    if total <= 0:
+        return float("nan"), float("nan")
+    return float((weights * xx).sum() / total), float((weights * yy).sum() / total)
+
+
+def calc_aperture_photometry_with_diagnostics(cut, flux_bkg_cut, bkg_positions, star_px_x, star_px_y,
+                                               aperture_radius):
+    """
+    Like `calc_aperture_photometry_bkg_pixels_with_sn_ratio`, but in one pass
+    also returns the SPOC-provided background's own aperture sum (from the
+    FITS `FLUX_BKG` column, for comparison against our own fitted plane) and
+    the flux-weighted centroid of the background-subtracted cut -- the extra
+    per-frame diagnostics ROADMAP.md's Этап 1 wants in the light-curve CSV.
+    Not a Julia port; kept separate so
+    `calc_aperture_photometry_bkg_pixels_with_sn_ratio`'s own output is
+    untouched for whatever else might still call it.
+
+    Returns (phot_flux, sn, flux_bkg, centroid_x, centroid_y); the first two
+    are NaN/0.0 and the rest NaN if the shared NaN guard trips.
+    """
+    result = _aperture_photometry_bkg_pixels_core(cut, bkg_positions, star_px_x, star_px_y, aperture_radius)
+    if result is None:
+        return np.nan, 0.0, np.nan, np.nan, np.nan
+    _bkg_cut, cut_nobkg, phot, sn = result
+    flux_bkg = aperture_sum(flux_bkg_cut, star_px_x, star_px_y, aperture_radius)
+    centroid_x, centroid_y = calc_flux_weighted_centroid(cut_nobkg, star_px_x, star_px_y, aperture_radius)
+    return phot, sn, flux_bkg, centroid_x, centroid_y
 
 
 def _fit_plane(bkg_fluxes, bkg_xs, bkg_ys, cut_width, cut_height):
@@ -197,3 +257,40 @@ def calc_aperture_prf_correction(aperture_radius, star_px_x, star_px_y, supersam
 
 def get_n_min_mean_background_from_cube(cube_slice, n_min):  # convenience alias
     return get_n_min_mean_background(cube_slice, n_min)
+
+
+def calc_prf_contamination_fraction(star_px_x, star_px_y, stars_x, stars_y, stars_flux,
+                                     supersampled_prf, cut_size, aperture_radius):
+    """
+    Fraction of the aperture's PRF-modeled flux that belongs to the target
+    star at (star_px_x, star_px_y), against every field star's own PRF
+    footprint landing in the same aperture. Low values (ROADMAP.md warns
+    below 0.8) mean the aperture is mostly collecting a neighbour's light,
+    not the target's own -- the motivation for PRF-deblending photometry
+    (see `isolated.prf_photometry`) in crowded fields.
+
+    Not a Julia port. `stars_x`/`stars_y`/`stars_flux` is the same field-star
+    list used by `find_background_prf_gaia_mags`/`create_gaia_prf_model`
+    (include the target itself); `stars_flux` is each star's TESS flux, e.g.
+    from `calc_tess_flux_from_mag`, in the same order as `stars_x`/`stars_y`.
+    The target is identified as whichever entry is closest to
+    (star_px_x, star_px_y), same matching style as `find_target_row`.
+    """
+    from .psf import add_prf_cut
+
+    stars_x = np.asarray(stars_x, dtype=float)
+    stars_y = np.asarray(stars_y, dtype=float)
+    stars_flux = np.asarray(stars_flux, dtype=float)
+
+    # add_prf_cut (not get_prf_cut) -- with a field of hundreds/thousands of
+    # Gaia stars in view, get_prf_cut's full-supersampled-array scan per star
+    # is impractically slow; add_prf_cut's windowed search is the same one
+    # `create_gaia_prf_model`/`build_prf_star_cuts` already rely on.
+    aperture_fluxes = np.empty(len(stars_x))
+    for i, (x, y, flux) in enumerate(zip(stars_x, stars_y, stars_flux)):
+        star_cut = np.zeros((cut_size, cut_size))
+        add_prf_cut(star_cut, flux, supersampled_prf, cut_size, cut_size, x, y)
+        aperture_fluxes[i] = aperture_sum(star_cut, star_px_x, star_px_y, aperture_radius)
+    target_idx = int(np.argmin(np.hypot(stars_x - star_px_x, stars_y - star_px_y)))
+    total = aperture_fluxes.sum()
+    return float(aperture_fluxes[target_idx] / total) if total else float("nan")

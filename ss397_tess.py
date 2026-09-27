@@ -14,12 +14,20 @@ SS 397, TESS сектор 80: анализ под замечания рецен�
 
 Запуск из PyCharm: поправь блок НАСТРОЙКИ ниже и нажми Run (зеленый треугольник).
 Файл должен лежать в корне проекта TESS_extractor_python (рядом с run.py).
+
+Числовая часть (спектр амплитуд, выбеливание, ошибки, модель красного шума)
+теперь живет в isolated/prewhitening.py и просто вызывается отсюда — раньше
+была продублирована почти дословно в этом файле (и одна из копий незаметно
+разошлась с другой в параметризации red_noise_fit). Здесь остались только
+загрузка/отбраковка кадров, отчеты, графики и настройки запуска.
 """
 import os
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.optimize import least_squares
+
+from isolated.lightcurve_tools import local_point_to_point_sigma
+from isolated.prewhitening import amp_spectrum, window_function, prewhiten, red_noise_fit
 
 # =============================================================================
 # НАСТРОЙКИ — правь здесь и жми Run
@@ -29,7 +37,7 @@ STAR_DIR = "stars_python/SS_397/50x50"
 # Отсутствующие файлы пропускаются с сообщением.
 RUNS = [
     (f"{STAR_DIR}/light_curve_sector_80_clean.csv", "ss397_clean"),   # кривая из статьи
-    ("out_localize/lc_deblended_SS397.csv", "ss397_prf"),             # после ss397_localize.py
+    (f"{STAR_DIR}/light_curve_sector_80_prf_clean.csv", "ss397_prf"),  # PRF-деблендинг, очищенный (ss397_localize.py)
     ("out_localize/lc_deblended_neighbour.csv", "neighbour"),         # яркий сосед
 ]
 OUTDIR = "out_tess"
@@ -52,9 +60,9 @@ PAPER_FREQS = [0.068, 0.132, 0.189, 1.516, 1.580, 1.625]
 # данные и отбраковка
 # =============================================================================
 def load_lc(path):
-    import pandas as pd
-    d = pd.read_csv(path)
-    tcol = "MJD" if "MJD" in d else d.columns[0]
+    from isolated.data_io import read_light_curve_csv
+    d = read_light_curve_csv(path)
+    tcol = "BTJD" if "BTJD" in d else d.columns[0]  # read_light_curve_csv already renamed old "MJD" files
     fcol = "FLUX" if "FLUX" in d else d.columns[1]
     d = d[np.isfinite(d[tcol]) & np.isfinite(d[fcol])]
     t = d[tcol].to_numpy(float)
@@ -63,27 +71,9 @@ def load_lc(path):
     return t[o], f[o]
 
 
-def local_p2p(t, y, win=0.25):
-    """Шум точка-к-точке (робастный, через MAD разностей) в скользящем окне win сут."""
-    d = np.diff(y)
-    sig = np.empty_like(y)
-    half = win / 2
-    lo = np.searchsorted(t, t - half)
-    hi = np.searchsorted(t, t + half)
-    for i in range(t.size):
-        a, b = lo[i], min(hi[i], t.size - 1)
-        dd = d[a:b]
-        if dd.size < 10:
-            sig[i] = np.nan
-            continue
-        sig[i] = 1.4826 * np.median(np.abs(dd - np.median(dd))) / np.sqrt(2)
-    sig[np.isnan(sig)] = np.nanmedian(sig)
-    return sig
-
-
 def quality_mask(t, y, win=0.25, kappa=2.5):
     """Точка хорошая, если локальный шум < kappa * медианный шум по сектору."""
-    sig = local_p2p(t, y, win)
+    sig = local_point_to_point_sigma(t, y, win)
     return sig < kappa * np.median(sig), sig
 
 
@@ -101,162 +91,6 @@ def segments(t, mask):
         else:
             i += 1
     return out
-
-
-# =============================================================================
-# спектр амплитуд, выбеливание, ошибки
-# =============================================================================
-def amp_spectrum(t, y, freqs, chunk=400):
-    """Амплитудный спектр (ДФТ) в единицах y: A(f) = 2/N |Σ y exp(-2πift)|."""
-    y = y - y.mean()
-    out = np.empty(freqs.size)
-    for k in range(0, freqs.size, chunk):
-        f = freqs[k:k + chunk]
-        ph = np.exp(-2j * np.pi * np.outer(f, t))
-        out[k:k + chunk] = 2.0 / t.size * np.abs(ph @ y)
-    return out
-
-
-def window_function(t, freqs, f0):
-    """Спектральное окно, центрированное на f0 (для рисунка)."""
-    return amp_spectrum(t, np.sin(2 * np.pi * f0 * t), freqs)
-
-
-NPOLY = 3   # полином 2-й степени по времени — медленный тренд за сектор
-
-
-def model(p, t, nf, t0):
-    x = t - t0
-    y = p[0] + p[1] * x + p[2] * x ** 2
-    for k in range(nf):
-        f, a, ph = p[NPOLY + 3 * k:NPOLY + 3 * k + 3]
-        y = y + a * np.sin(2 * np.pi * (f * t + ph))
-    return y
-
-
-def detrend_poly(t, y):
-    t0 = t.mean()
-    c = np.polyfit(t - t0, y, 2)
-    return y - np.polyval(c, t - t0)
-
-
-def fit_all(t, y, freqs, amps, phases, fmin=0.0, fmax=np.inf, anchors=None, halfwidth=None):
-    t0 = t.mean()
-    c = np.polyfit(t - t0, y, 2)[::-1]
-    p0 = list(c)
-    lo = [-np.inf] * NPOLY
-    hi = [np.inf] * NPOLY
-    for i, (f, a, ph) in enumerate(zip(freqs, amps, phases)):
-        p0 += [f, a, ph]
-        if anchors is not None:     # частота может сместиться не более чем на halfwidth от момента обнаружения
-            lo += [max(fmin, anchors[i] - halfwidth), -np.inf, -np.inf]
-            hi += [min(fmax, anchors[i] + halfwidth), np.inf, np.inf]
-        else:
-            lo += [fmin, -np.inf, -np.inf]
-            hi += [fmax, np.inf, np.inf]
-    p0 = np.clip(p0, np.array(lo) + 1e-9, np.array(hi) - 1e-9)
-    r = least_squares(lambda p: model(p, t, len(freqs), t0) - y, p0, bounds=(lo, hi), method="trf",
-                      x_scale="jac")
-    p = r.x
-    fr = p[NPOLY::3].copy(); am = p[NPOLY + 1::3].copy(); ph = p[NPOLY + 2::3].copy()
-    neg = am < 0
-    am[neg] *= -1; ph[neg] += 0.5
-    return fr, am, ph % 1, y - model(p, t, len(freqs), t0)
-
-
-def phase_guess(t, y, f):
-    X = np.c_[np.sin(2 * np.pi * f * t), np.cos(2 * np.pi * f * t)]
-    s, c = np.linalg.lstsq(X, y - y.mean(), rcond=None)[0]
-    return np.hypot(s, c), (np.arctan2(c, s) / (2 * np.pi)) % 1
-
-
-def local_noise(freqs_grid, amp_res, f, box=1.0):
-    m = (freqs_grid > max(freqs_grid[0], f - box / 2)) & (freqs_grid < f + box / 2)
-    return amp_res[m].mean()
-
-
-def run_lengths_D(res):
-    """Средняя длина серии остатков одного знака (Schwarzenberg-Czerny 1991)."""
-    s = np.sign(res)
-    changes = np.count_nonzero(s[1:] != s[:-1])
-    return max(1.0, res.size / (changes + 1))
-
-
-def prewhiten(t, y, fmin, fmax, df, nmax=15, snr_stop=4.0, box=1.0):
-    """
-    Итеративное выбеливание. На каждом шаге к амплитудному спектру остатков
-    подгоняется модель красного + белого шума, и берется пик с НАИБОЛЬШИМ S/N
-    относительно этой модели (а не просто самый высокий: у Be-звезд на низких
-    частотах сильный стохастический красный шум). Остановка при S/N < snr_stop.
-    После добавления каждой частоты все параметры + полиномиальный тренд
-    подгоняются заново одновременно.
-    """
-    freqs_grid = np.arange(fmin, fmax, df)
-    fr, am, ph, anchors = [], [], [], []
-    T = t.max() - t.min()
-    res = detrend_poly(t, y)
-    for _ in range(nmax):
-        A = amp_spectrum(t, res, freqs_grid)
-        rn, _ = red_noise_fit(freqs_grid, A)
-        snr = A / rn(freqs_grid)
-        # только локальные максимумы
-        peak = np.r_[False, (A[1:-1] > A[:-2]) & (A[1:-1] > A[2:]), False]
-        # запрет частот ближе 1/T (рэлеевское разрешение) к уже найденным:
-        # иначе МНК начинает описывать амплитудную/частотную модуляцию парой
-        # почти равных частот с огромными противофазными амплитудами
-        for f0 in fr:
-            peak &= np.abs(freqs_grid - f0) > 1.0 / T
-        snr[~peak] = 0
-        j = np.argmax(snr)
-        if snr[j] < snr_stop:
-            break
-        fine = np.linspace(freqs_grid[j] - df, freqs_grid[j] + df, 41)
-        fnew = fine[np.argmax(amp_spectrum(t, res, fine))]
-        a0, p0 = phase_guess(t, res, fnew)
-        fr.append(fnew); am.append(a0); ph.append(p0); anchors.append(fnew)
-        f_, a_, p_, res = fit_all(t, y, fr, am, ph, fmin=fmin, fmax=fmax,
-                                  anchors=anchors, halfwidth=0.25 / T)
-        fr, am, ph = list(f_), list(a_), list(p_)
-    A_res = amp_spectrum(t, res, freqs_grid)
-    return np.array(fr), np.array(am), np.array(ph), res, freqs_grid, A_res
-
-
-def errors_mo99(t, res, amps):
-    """Montgomery & O'Donoghue (1999) × sqrt(D) на коррелированные остатки."""
-    N, T = t.size, t.max() - t.min()
-    sN = res.std()
-    D = run_lengths_D(res)
-    sf = np.sqrt(6.0) / (np.pi * T) * sN / (amps * np.sqrt(N)) * np.sqrt(D)
-    sa = np.sqrt(2.0 / N) * sN * np.sqrt(D) * np.ones_like(amps)
-    sp = sa / amps / (2 * np.pi)          # в долях периода
-    return sf, sa, sp, D, sN
-
-
-def red_noise_fit(freqs, amp, smooth=1.0):
-    """
-    Модель шума A(f) = A0/(1+(f/fc)^g) + Cw (Bowman et al. 2019), подгоняется к
-    амплитудному спектру остатков, сглаженному СКОЛЬЗЯЩЕЙ МЕДИАНОЙ шириной smooth 1/сут
-    (× 1.0645 — переход от медианы к среднему для шумового спектра). Медиана устойчива
-    к еще не вычтенным сильным пикам: иначе мощная группа частот сама задирает
-    "шум" и выбеливание останавливается слишком рано.
-    """
-    from scipy.ndimage import median_filter
-    df = freqs[1] - freqs[0]
-    n = max(3, int(round(smooth / df)) | 1)
-    sm = 1.0645 * median_filter(amp, size=n, mode="reflect")
-    m = freqs > 2 * df
-    x, yv = freqs[m], sm[m]
-
-    def mdl(p, x):
-        A0, fc, g, Cw = np.exp(p[0]), np.exp(p[1]), p[2], np.exp(p[3])
-        return A0 / (1 + (x / fc) ** g) + Cw
-
-    hi = x > np.percentile(x, 80)
-    lo_b, hi_b = [-20, np.log(0.02), 0.5, -20], [10, np.log(10), 6, 10]
-    p0 = [np.log(yv[x < 1].mean() + 1e-9), np.log(1.0), 2.0, np.log(np.median(yv[hi]) + 1e-9)]
-    p0 = list(np.clip(p0, np.array(lo_b) + 1e-6, np.array(hi_b) - 1e-6))
-    r = least_squares(lambda p: np.log(mdl(p, x)) - np.log(yv), p0, bounds=(lo_b, hi_b))
-    return lambda f: mdl(r.x, f), r.x
 
 
 # =============================================================================
@@ -285,14 +119,16 @@ def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.
     for label, m in [("all", np.ones_like(good)), ("strict", good)]:
         tt, yy = t[m], y[m] - y[m].mean()
         T = tt.max() - tt.min()
-        df = 0.1 / T
-        fr, am, ph, res, fg, Ares = prewhiten(tt, yy, 0.5 / T, fmax, df, nmax=nmax)
-        order = np.argsort(fr)
-        fr, am, ph = fr[order], am[order], ph[order]
-        sf, sa, sp, D, sN = errors_mo99(tt, res, am)
-        rn, _ = red_noise_fit(fg, Ares)
-        snr_loc = np.array([a / local_noise(fg, Ares, x) for x, a in zip(fr, am)])
-        snr_red = am / rn(fr)
+        peaks, extra = prewhiten(tt, yy, fmax, fmin=0.5 / T, nmax=nmax)
+        fr = np.array([p["frequency"] for p in peaks])
+        am = np.array([p["amplitude"] for p in peaks])
+        sf = np.array([p["frequency_err"] for p in peaks])
+        sa = np.array([p["amplitude_err"] for p in peaks])
+        snr_loc = np.array([p["snr_local"] for p in peaks])
+        snr_red = np.array([p["snr_red"] for p in peaks])
+        res, fg, Ares = extra["residuals"], extra["grid"], extra["amp_residuals"]
+        rn = extra.get("noise_model") or red_noise_fit(fg, Ares)[0]
+        D, sN = extra["D"], extra["sigma_res"]
         results[label] = dict(t=tt, y=yy, fr=fr, am=am, sf=sf, sa=sa, res=res, fg=fg, Ares=Ares, rn=rn)
 
         P(f"\n## набор '{label}': N = {tt.size}, σ(остатков) = {sN:.2f} ppt, D = {D:.1f}")
@@ -415,7 +251,6 @@ def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.
         ax.plot(t[s & good], y[s & good], ".", ms=2, color="k")
         ax.plot(t[s & ~good], y[s & ~good], ".", ms=2, color="C3")
         ax.axvspan(b1, b2, color="C0", alpha=0.3)
-        # модель из найденных частот (без трендов < 2/T) для наглядности
         ax.set_xlabel("BJD − 2457000"); ax.set_ylabel("ΔF, ppt")
         ax.set_title("TESS вокруг ночи наблюдений на БТА")
         fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_bta_night.pdf"))

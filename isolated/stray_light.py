@@ -84,9 +84,11 @@ def stray_light_monitor_curve(star_name, sector, cut_width, cut_height, pixels, 
     `pixels` : list of (x, y) 1-based pixel coordinates, e.g. from
         `pick_stripe_pixels`.
 
-    Returns a DataFrame with "MJD"/"MAG" columns, same one-row-per-frame
-    convention as `load_light_curve`'s output, so it plugs straight into
-    `pick_exclusion_windows` / `exclude_frame_windows`.
+    Returns a DataFrame with "BTJD"/"FRAME"/"MAG" columns, same one-row-per-
+    frame convention as `load_light_curve`'s output (row i, 0-based, is
+    frame i + 1 -- this function always builds from the full, untouched
+    cutout, so `FRAME` here is trivially `1..n_cuts`), so it plugs straight
+    into `pick_exclusion_windows` / `exclude_frame_windows`.
     """
     if cut_height is None:
         cut_height = cut_width
@@ -100,7 +102,8 @@ def stray_light_monitor_curve(star_name, sector, cut_width, cut_height, pixels, 
 
     monitor_flux = np.array([np.median(get_frame(flux_cuts, i + 1)[xs, ys]) for i in range(n_cuts)])
 
-    return pd.DataFrame({"MJD": mjds, "FLUX": monitor_flux, "MAG": calc_tess_magnitude(monitor_flux)})
+    return pd.DataFrame({"BTJD": mjds, "FRAME": np.arange(1, n_cuts + 1), "FLUX": monitor_flux,
+                          "MAG": calc_tess_magnitude(monitor_flux)})
 
 
 def plot_stray_light_diagnostics(star_name, sector, cut_width, cut_height, df_lc, df_monitor,
@@ -134,7 +137,7 @@ def plot_stray_light_diagnostics(star_name, sector, cut_width, cut_height, df_lc
     if cut_height is None:
         cut_height = cut_width
 
-    mjd = df_lc["MJD"].to_numpy()
+    mjd = df_lc["BTJD" if "BTJD" in df_lc.columns else "MJD"].to_numpy()
     target_flux = df_lc["FLUX"].to_numpy()
     monitor_flux = df_monitor["FLUX"].to_numpy()
     n_cuts = len(monitor_flux)
@@ -181,7 +184,7 @@ def plot_stray_light_diagnostics(star_name, sector, cut_width, cut_height, df_lc
             for start, end in windows:
                 ax.axvspan(mjd[start - 1], mjd[end - 1], color="red", alpha=0.15)
     ax_lc.set_title(f"{star_name}, sector {sector}")
-    ax_mon.set_xlabel("MJD")
+    ax_mon.set_xlabel("BTJD")
 
     ax_corr.scatter(monitor_excess, target_excess, s=6, alpha=0.4)
     ax_corr.scatter(monitor_excess[candidate_idx], target_excess[candidate_idx], s=10, color="red",
@@ -243,17 +246,19 @@ def correct_stray_light(df_lc, df_monitor, aperture_radius=3, plot=False, star_n
     df_corrected["MAG"] = calc_tess_magnitude(df_corrected["FLUX"].to_numpy())
 
     if plot:
+        lc_time_col = "BTJD" if "BTJD" in df_lc.columns else "MJD"
+        mon_time_col = "BTJD" if "BTJD" in df_monitor.columns else "MJD"
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-        ax1.plot(df_lc["MJD"], df_lc["MAG"], lw=0.8, label="original")
-        ax1.plot(df_corrected["MJD"], df_corrected["MAG"], lw=0.8, label="corrected")
+        ax1.plot(df_lc[lc_time_col], df_lc["MAG"], lw=0.8, label="original")
+        ax1.plot(df_corrected[lc_time_col], df_corrected["MAG"], lw=0.8, label="corrected")
         ax1.invert_yaxis()
         ax1.set_ylabel("TESS magnitude")
         ax1.set_title(f"{star_name}, sector {sector}" if star_name else "stray-light correction")
         ax1.legend(fontsize=8)
 
-        ax2.plot(df_monitor["MJD"], df_monitor["MAG"], lw=0.8, color="tab:red")
+        ax2.plot(df_monitor[mon_time_col], df_monitor["MAG"], lw=0.8, color="tab:red")
         ax2.invert_yaxis()
-        ax2.set_xlabel("MJD")
+        ax2.set_xlabel(mon_time_col)
         ax2.set_ylabel("stray-light\nmonitor (MAG)")
 
         fig.tight_layout()

@@ -22,8 +22,8 @@
     periodogram_sector_{N}{суффикс}_dynamic.{fmt}         — динамический спектр
 """
 import numpy as np
-import pandas as pd
 
+from isolated.data_io import read_light_curve_csv
 from isolated.periodogram import compute_ls_periodogram, find_periodogram_peaks
 from isolated.periodogram import save_periodogram, plot_periodogram
 from isolated.periodogram import suggest_period_range
@@ -44,12 +44,12 @@ def periodogram_compute_analise(star_name_process, sector_number, cadr_width_for
     name_file_data = f"{star_dir}/light_curve_sector_{sector_number}{lc_suffix}.csv"
     base = f"{star_dir}/periodogram_sector_{sector_number}{lc_suffix.replace('_clean', '')}"
 
-    df_clean = pd.read_csv(name_file_data)
+    df_clean = read_light_curve_csv(name_file_data)
     print(f"Кривая: {name_file_data}, {len(df_clean)} точек")
 
     # ------------------------------------------------------------------ 1. LS
     # max_period_fraction=0.5: период должен уложиться в ряд хотя бы дважды
-    period_range = suggest_period_range(df_clean['MJD'], nyquist_factor=nyquist_factor,
+    period_range = suggest_period_range(df_clean['BTJD'], nyquist_factor=nyquist_factor,
                                         max_period_fraction=max_period_fraction)
     print(f"period_range = {period_range[0]:.5f} .. {period_range[1]:.3f} d")
 

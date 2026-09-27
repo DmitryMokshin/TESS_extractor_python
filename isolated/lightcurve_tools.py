@@ -93,9 +93,14 @@ def exclude_frame_windows(df_lc, windows):
     so a bad stretch spotted in a rendered video clip can be excised with
     the exact same numbers.
 
-    Assumes `df_lc` is the untouched, full-cadence light curve returned by
-    `load_light_curve` (one row per cutout frame, in frame order) -- row i
-    (0-based) is frame i + 1.
+    If `df_lc` has a `FRAME` column (ROADMAP.md Этап 1; written by
+    `load_light_curve`/`prf_photometry.load_prf_light_curve`), windows are
+    matched against it directly, so this also works correctly on a curve
+    that already had some rows dropped (frame numbers no longer equal row
+    position there). Older cached files without `FRAME` fall back to the
+    original assumption: `df_lc` is the untouched, full-cadence light curve
+    (one row per cutout frame, in frame order) -- row i (0-based) is frame
+    i + 1.
 
     Returns (clean_df, trash_df): clean_df is everything outside the
     windows, trash_df is just the excised rows (nothing is discarded, so it
@@ -103,7 +108,7 @@ def exclude_frame_windows(df_lc, windows):
     with the index reset; `df_lc` is left untouched.
     """
     n = len(df_lc)
-    frame_no = np.arange(1, n + 1)
+    frame_no = df_lc["FRAME"].to_numpy() if "FRAME" in df_lc.columns else np.arange(1, n + 1)
     keep = np.ones(n, dtype=bool)
     for start, end in windows:
         keep &= ~((frame_no >= start) & (frame_no <= end))
@@ -117,7 +122,9 @@ class WindowPicker:
 
     def __init__(self, df_lc, star_name="", sector=None):
         self.df_lc = df_lc
-        self.mjds = df_lc["MJD"].to_numpy()
+        time_col = "BTJD" if "BTJD" in df_lc.columns else "MJD"
+        self.mjds = df_lc[time_col].to_numpy()
+        self.frame_no = df_lc["FRAME"].to_numpy() if "FRAME" in df_lc.columns else None
         self.windows = []
         self._spans = []
 
@@ -125,7 +132,7 @@ class WindowPicker:
         self.fig.subplots_adjust(bottom=0.22)
         self.ax.plot(self.mjds, df_lc["MAG"].to_numpy(), lw=0.8)
         self.ax.invert_yaxis()
-        self.ax.set_xlabel("MJD")
+        self.ax.set_xlabel(time_col)
         self.ax.set_ylabel("TESS magnitude")
         title = f"{star_name}, sector {sector}" if star_name else "light curve"
         self.ax.set_title(f"{title} -- drag to mark a bad window, Undo/Done below")
@@ -147,7 +154,10 @@ class WindowPicker:
         pos_start, pos_end = max(0, pos_start), min(len(self.mjds) - 1, pos_end)
         if pos_end < pos_start:
             return
-        self.windows.append([pos_start + 1, pos_end + 1])
+        if self.frame_no is not None:
+            self.windows.append([int(self.frame_no[pos_start]), int(self.frame_no[pos_end])])
+        else:
+            self.windows.append([pos_start + 1, pos_end + 1])
         self._spans.append(self.ax.axvspan(xmin, xmax, color="red", alpha=0.3))
         self.fig.canvas.draw_idle()
 
@@ -242,6 +252,34 @@ def find_acf(jds, fluxs, oversample=1.5):
     return lags, acf / flux_dispersion
 
 
+def local_point_to_point_sigma(t, y, window=0.25):
+    """
+    Robust point-to-point scatter -- the MAD of consecutive differences
+    (scaled to a Gaussian sigma), in a sliding +/-window/2 window -- as an
+    estimate of the local noise level. Used both to flag noisy stretches
+    (points with `sigma > kappa * median(sigma)` are the bad ones) and as a
+    per-point error proxy.
+
+    Not a Julia port -- a shared replacement for three near-identical copies
+    that used to live in `ss397_localize.py` (`local_p2p_ppt`,
+    `local_noise_mask`) and `ss397_tess.py` (`local_p2p`); also the same
+    metric ROADMAP.md's automatic-cleaning stage (Этап 5) wants for its
+    "local scatter of neighbouring points > kappa * median" rule.
+    """
+    t = np.asarray(t, dtype=float)
+    y = np.asarray(y, dtype=float)
+    d = np.diff(y)
+    lo = np.searchsorted(t, t - window / 2)
+    hi = np.searchsorted(t, t + window / 2)
+    sigma = np.array([
+        1.4826 * np.median(np.abs(d[a:min(b, d.size)] - np.median(d[a:min(b, d.size)]))) / np.sqrt(2)
+        if min(b, d.size) - a > 10 else np.nan
+        for a, b in zip(lo, hi)
+    ])
+    sigma[np.isnan(sigma)] = np.nanmedian(sigma)
+    return sigma
+
+
 def save_lc_figure(star_name, sector, cut_size, d_mag_r=5.0, aperture_radius=3, day_step=2,
                     jd_box=0.3, sigma_tol=5, n_out=10, star_directory=STAR_DIRECTORY, out_dir="plots/png"):
     """
@@ -253,7 +291,7 @@ def save_lc_figure(star_name, sector, cut_size, d_mag_r=5.0, aperture_radius=3, 
                               rewrite_file=False, star_directory=star_directory)
     nospace_star_name = get_nospace_star_name(star_name)
 
-    jds = get_true_jd(df_lc["MJD"].to_numpy())
+    jds = get_true_jd(df_lc["BTJD" if "BTJD" in df_lc.columns else "MJD"].to_numpy())
 
     nonan_jd, nonan_mag = delete_nans(jds, df_lc["MAG"].to_numpy())
     clean_flux_sigma(nonan_jd, nonan_mag, jd_box, sigma_tol, n_out)

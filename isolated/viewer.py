@@ -69,7 +69,7 @@ def _load_cutout_scene(star_name, sector, cut_width, cut_height, aperture_radius
                               rewrite_file=rewrite_light_curve_file,
                               rewrite_gaia_stars_file=rewrite_gaia_stars_file)
     phot_flux = df_lc["FLUX"].to_numpy()
-    mjds = df_lc["MJD"].to_numpy()
+    mjds = df_lc["BTJD" if "BTJD" in df_lc.columns else "MJD"].to_numpy()
 
     df_star = load_star_gaia_data(star_name, star_directory)
     star_mag = float(df_star["phot_rp_mean_mag"])
@@ -147,7 +147,7 @@ def plot_cuts(star_name, sector, cut_width, cut_height=None, aperture_radius=5, 
     mags = calc_tess_magnitude(phot_flux)
     ax_lc.plot(mjds, mags, lw=0.8)
     ax_lc.invert_yaxis()
-    ax_lc.set_xlabel("MJD")
+    ax_lc.set_xlabel("BTJD")
     ax_lc.set_ylabel("TESS magnitude")
     cursor_line = ax_lc.axvline(mjds[start_cut - 1], color="red")
     cursor_point, = ax_lc.plot([mjds[start_cut - 1]], [mags[start_cut - 1]], "ro", ms=4)
@@ -286,7 +286,7 @@ def save_cutout_video(star_name, sector, cut_width, cut_height=None, aperture_ra
     mags = calc_tess_magnitude(phot_flux)
     ax_lc.plot(mjds, mags, lw=0.8)
     ax_lc.invert_yaxis()
-    ax_lc.set_xlabel("MJD")
+    ax_lc.set_xlabel("BTJD")
     ax_lc.set_ylabel("TESS magnitude")
     cursor_line = ax_lc.axvline(mjds[frames[0] - 1], color="red")
     cursor_point, = ax_lc.plot([mjds[frames[0] - 1]], [mags[frames[0] - 1]], "ro", ms=4)

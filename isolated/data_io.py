@@ -40,6 +40,23 @@ def _read_gaia_csv(path: str) -> pd.DataFrame:
     return df
 
 
+def read_light_curve_csv(path: str) -> pd.DataFrame:
+    """
+    Read a light-curve CSV (`load_light_curve`/`prf_photometry.
+    load_prf_light_curve` output, or anything with the same column
+    convention), tolerating old cached files written before ROADMAP.md's
+    Этап 1: they call the time column "MJD" (it was always really BTJD --
+    see CLAUDE.md) and have no `FRAME`/`CADENCENO`/`QUALITY`/... columns at
+    all. New files already say "BTJD"; old ones get renamed on the fly so
+    every caller can just use `df["BTJD"]` either way. Not a Julia port --
+    same self-healing idea as `_read_gaia_csv`, for a different file family.
+    """
+    df = pd.read_csv(path)
+    if "BTJD" not in df.columns and "MJD" in df.columns:
+        df = df.rename(columns={"MJD": "BTJD"})
+    return df
+
+
 def find_target_row(gaia_stars_data: pd.DataFrame, gaia_data: pd.Series, sector, max_sep_arcsec: float = 2.0) -> pd.Series:
     """
     Find the target star's row inside a Gaia-stars-in-view catalog.
@@ -322,15 +339,22 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
     """
     from .psf import get_tesscut_prf_supersampled
     from .photometry import (find_background_prf_gaia_mags, calc_aperture_prf_correction,
-                              calc_aperture_photometry_bkg_pixels_with_sn_ratio)
+                              calc_aperture_photometry_with_diagnostics,
+                              calc_prf_contamination_fraction)
+    from .geometry import calc_tess_flux_from_mag
 
     if cut_height is None:
         cut_height = cut_width
 
     cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory, sector=sector)[sector]
     flux_cuts = cut_fits[1].data["FLUX"]  # shape (n_cuts, height, width)
+    flux_bkg_cuts = cut_fits[1].data["FLUX_BKG"]
     n_cuts = flux_cuts.shape[0]
     mjds = cut_fits[1].data["TIME"]
+    cadenceno = cut_fits[1].data["CADENCENO"]
+    quality = cut_fits[1].data["QUALITY"]
+    pos_corr1 = cut_fits[1].data["POS_CORR1"]
+    pos_corr2 = cut_fits[1].data["POS_CORR2"]
 
     gaia_stars_data = load_gaia_stars_in_view_data(star_name, cut_fits, d_mag_r, rewrite_gaia_stars_file,
                                                     star_directory)
@@ -358,24 +382,46 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
         def frame(i):
             return flux_cuts[i].T
 
+        def frame_bkg(i):
+            return flux_bkg_cuts[i].T
+
         bkg_pixels = find_background_prf_gaia_mags(frame(n_cuts // 4), prf, stars_x, stars_y, stars_mag)
 
         aperture_correction = calc_aperture_prf_correction(aperture_radius, star_px[0], star_px[1], prf, cut_height)
 
+        contamination = calc_prf_contamination_fraction(
+            star_px[0], star_px[1], stars_x, stars_y, calc_tess_flux_from_mag(stars_mag), prf, cut_height,
+            aperture_radius)
+        if contamination < 0.8:
+            print(f"Warning: only {contamination:.0%} of the aperture flux is modeled to be {star_name}'s own "
+                  f"(sector {sector}, r={aperture_radius}px) -- a crowded field; consider PRF-deblending "
+                  f"photometry (isolated.prf_photometry) instead of aperture photometry for this star.")
+
         phot_flux = np.zeros(n_cuts)
         sn = np.zeros(n_cuts)
+        flux_bkg = np.zeros(n_cuts)
+        centroid_x = np.zeros(n_cuts)
+        centroid_y = np.zeros(n_cuts)
         for i in tqdm(range(n_cuts), desc=f"{star_name} sector {sector}: photometry", unit="frame"):
-            phot_flux[i], sn[i] = calc_aperture_photometry_bkg_pixels_with_sn_ratio(
-                frame(i), bkg_pixels, star_px[0], star_px[1], aperture_radius)
+            phot_flux[i], sn[i], flux_bkg[i], centroid_x[i], centroid_y[i] = calc_aperture_photometry_with_diagnostics(
+                frame(i), frame_bkg(i), bkg_pixels, star_px[0], star_px[1], aperture_radius)
         phot_flux *= aperture_correction
 
         lc_df = pd.DataFrame({
-            "MJD": mjds,
+            "BTJD": mjds,
+            "FRAME": np.arange(1, n_cuts + 1),
+            "CADENCENO": cadenceno,
+            "QUALITY": quality,
             "FLUX": phot_flux,
             "MAG": calc_tess_magnitude(np.abs(phot_flux)),
             "SN": sn,
+            "FLUX_BKG": flux_bkg,
+            "POS_CORR1": pos_corr1,
+            "POS_CORR2": pos_corr2,
+            "CENTROID_X": centroid_x,
+            "CENTROID_Y": centroid_y,
         })
         lc_df.to_csv(light_curve_file, index=False)
         return lc_df
 
-    return pd.read_csv(light_curve_file)
+    return read_light_curve_csv(light_curve_file)
