@@ -14,6 +14,7 @@
 ниже и жмёте Run на любом скрипте пайплайна.
 """
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -30,6 +31,11 @@ class RunConfig:
     # --- апертурная фотометрия (используется, если photometry_mode == "aperture") ---
     aperture_radius: int = 3
     d_mag_r: float = 5.0
+    # порог правила №2 автоочистки (ROADMAP.md Этап 5): кадры со STAR_BKG_RATIO
+    # ниже этого выбрасываются. По умолчанию выключено (ROADMAP не дает числа,
+    # а порог напрямую меняет официальную _clean-кривую) -- включать осознанно
+    # для конкретной звезды, см. isolated.cleaning.auto_clean_light_curve.
+    star_bkg_ratio_min: Optional[float] = None
 
     # --- PRF-фотометрия (используется, если photometry_mode == "prf") ---
     prf_box: int = 13

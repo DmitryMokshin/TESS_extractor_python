@@ -12,6 +12,7 @@ import os
 import traceback
 
 import numpy as np
+import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.widgets import SpanSelector, Button
@@ -113,6 +114,21 @@ def exclude_frame_windows(df_lc, windows):
     for start, end in windows:
         keep &= ~((frame_no >= start) & (frame_no <= end))
     return df_lc.loc[keep].reset_index(drop=True), df_lc.loc[~keep].reset_index(drop=True)
+
+
+def windows_to_log(df_lc, windows, reason):
+    """
+    Log entries (`FRAME, BTJD, REASON` columns) for the rows
+    `exclude_frame_windows` would drop for `windows` -- lets a manual window
+    pick (`pick_exclusion_windows`) be recorded in the same log format as
+    `cleaning.auto_clean_light_curve`'s automatic rules, so both can be
+    concatenated (`pd.concat`) into one combined cleaning log
+    (ROADMAP.md Этап 5).
+    """
+    _clean, trash = exclude_frame_windows(df_lc, windows)
+    time_col = "BTJD" if "BTJD" in df_lc.columns else "MJD"
+    frame_no = trash["FRAME"] if "FRAME" in trash.columns else trash.index + 1
+    return pd.DataFrame({"FRAME": frame_no, "BTJD": trash[time_col], "REASON": reason})
 
 
 class WindowPicker:

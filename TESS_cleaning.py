@@ -15,11 +15,14 @@ windows_frames уже урезанную кривую -- номера кадро
 те кадры. Резать сразу оба набора окон за один проход -- единственный
 надёжный способ.
 """
+import pandas as pd
+
 from isolated.data_io import load_star_gaia_data, load_light_curve
 from isolated.tess_point import find_tess_sectors
 from isolated.config import TESS_MAX_SECTORS
+from isolated.cleaning import auto_clean_light_curve, save_cleaning_log, summarize_cleaning_log
 from isolated.lightcurve_tools import exclude_frame_windows, pick_exclusion_windows, save_clean_light_curve, \
-    save_trash_light_curve
+    save_trash_light_curve, windows_to_log
 from isolated.stray_light import pick_stripe_pixels, stray_light_monitor_curve, plot_stray_light_diagnostics
 from run_config import CONFIG
 
@@ -53,8 +56,17 @@ def clean_sector(star_name, sector, cut_width, cut_height=None):
 
     df_lc = load_light_curve(star_name, sector, cut_width, cut_height)
 
-    # 1. Точечная чистка: провалы, нули, явные выбросы -- выделяем мышью (drag) прямо на кривой блеска
-    windows_lc = pick_exclusion_windows(df_lc, star_name=star_name, sector=sector)
+    # 0. Автоочистка (ROADMAP.md Этап 5): QUALITY -> STAR_BKG_RATIO -> локальный шум,
+    # по порядку, каждое правило -- на выживших после предыдущего
+    df_auto, log_auto = auto_clean_light_curve(
+        df_lc, quality_bitmask=CONFIG.quality_bitmask, star_bkg_ratio_min=CONFIG.star_bkg_ratio_min,
+        local_noise_kappa=CONFIG.local_noise_kappa)
+    print(f"Автоочистка: {len(df_lc)} -> {len(df_auto)} кадров ("
+          + ", ".join(f"{reason}: {count}" for reason, count in log_auto["REASON"].value_counts().items()) + ")")
+
+    # 1. Точечная чистка: провалы, нули, явные выбросы -- выделяем мышью (drag) прямо на кривой блеска,
+    # уже без того, что отсеяла автоочистка (меньше шума на глаз)
+    windows_lc = pick_exclusion_windows(df_auto, star_name=star_name, sector=sector)
     print("Окна точечной чистки:", windows_lc)
 
     # 2. Чистка на уровне кадров: засветка/полосы, которые точечная чистка могла не поймать
@@ -68,12 +80,22 @@ def clean_sector(star_name, sector, cut_width, cut_height=None):
     plot_stray_light_diagnostics(star_name, sector, cut_width, cut_height, df_lc, df_monitor,
                                   windows=windows_frames)
 
-    # 3. Вырезаем оба набора окон одним проходом по исходной кривой
+    # 3. Вырезаем оба набора ручных окон одним проходом по уже автоочищенной кривой
     all_windows = windows_lc + windows_frames
-    df_clean, df_trash = exclude_frame_windows(df_lc, all_windows)
+    df_clean, df_trash = exclude_frame_windows(df_auto, all_windows)
 
     save_clean_light_curve(df_clean, star_name, sector, cut_width, cut_height)
     save_trash_light_curve(df_trash, star_name, sector, all_windows, cut_width, cut_height)
+
+    # общий лог (автоочистка + ручные окна) -- по нему можно дословно восстановить,
+    # почему выброшен каждый кадр (ROADMAP.md Этап 5, критерий готовности)
+    log_manual = pd.concat([
+        windows_to_log(df_auto, windows_lc, "manual:point-picker"),
+        windows_to_log(df_auto, windows_frames, "manual:stray-light"),
+    ], ignore_index=True)
+    log_combined = pd.concat([log_auto, log_manual], ignore_index=True).sort_values("FRAME").reset_index(drop=True)
+    log_path = save_cleaning_log(log_combined, star_name, sector, cut_width, cut_height)
+    print(f"\nЛог чистки: {log_path}\n{summarize_cleaning_log(log_combined, total_frames=len(df_lc))}")
 
     return df_clean
 

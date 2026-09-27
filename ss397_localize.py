@@ -49,6 +49,7 @@ from isolated.data_io import load_tess_cutouts, load_gaia_stars_in_view_data
 from isolated.psf import get_tesscut_prf_supersampled
 from isolated.geometry import get_nospace_star_name, calc_tess_magnitude
 from isolated.lightcurve_tools import local_point_to_point_sigma
+from isolated.cleaning import quality_mask, auto_clean_light_curve, save_cleaning_log, summarize_cleaning_log
 from isolated.prf_photometry import select_prf_model_stars, build_prf_star_cuts, deblend_prf_flux
 from run_config import CONFIG
 
@@ -151,16 +152,16 @@ def main():
     print(f"Звезд в модели окна: {len(stars)}")
     print(stars[["source_id", "t_mag", "px_x", "px_y"]].to_string())
 
-    # --- выбор кадров: только QUALITY (см. докстринг модуля) ---
+    # --- выбор кадров: только QUALITY (см. докстринг модуля; правило 1, ROADMAP.md Этап 5) ---
     bits = [b for b in range(20) if np.any(q_all & (1 << b))]
     print("Флаги QUALITY в секторе (бит: число кадров): " +
           ", ".join(f"{1 << b}: {np.count_nonzero(q_all & (1 << b))}" for b in bits))
-    good = np.isfinite(t_all)
-    if QUALITY_BITMASK is None:
-        good &= (q_all == 0)
-    elif QUALITY_BITMASK:
-        good &= (q_all & QUALITY_BITMASK) == 0
+    finite = np.isfinite(t_all)
+    q_ok = quality_mask(q_all, QUALITY_BITMASK)
+    good = finite & q_ok
     print(f"Кадров: всего {t_all.size}, используем после фильтра QUALITY: {good.sum()}")
+    log_quality = pd.DataFrame({"FRAME": frame_no_all[finite & ~q_ok], "BTJD": t_all[finite & ~q_ok],
+                                "REASON": "QUALITY"})
 
     x0, y0 = box_x0 - 1, box_y0 - 1  # 0-based для среза куба
     box = cube[good, x0:x0 + BOX, y0:y0 + BOX]
@@ -181,11 +182,21 @@ def main():
                   "MAG": calc_tess_magnitude(np.abs(fluxes[:, it]))}).to_csv(
         os.path.join(star_dir, f"light_curve_sector_{SECTOR}_prf.csv"), index=False)
 
-    # отбраковка по шуму PRF-кривой цели (для _prf_clean.csv и карт амплитуд ниже)
-    m = local_point_to_point_sigma(t, fluxes[:, it] / np.median(fluxes[:, it])) < \
-        LOCAL_NOISE_KAPPA * np.median(local_point_to_point_sigma(t, fluxes[:, it] / np.median(fluxes[:, it])))
+    # отбраковка по шуму PRF-кривой цели (правило 3, ROADMAP.md Этап 5) -- через общую
+    # auto_clean_light_curve (bitmask=0: правило 1 уже применено выше), для _prf_clean.csv
+    # и карт амплитуд ниже
+    df_target = pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": fluxes[:, it]})
+    _df_target_clean, log_noise = auto_clean_light_curve(df_target, quality_bitmask=0,
+                                                          local_noise_kappa=LOCAL_NOISE_KAPPA)
+    m = ~df_target["FRAME"].isin(log_noise["FRAME"]).to_numpy()
     print(f"После отбраковки шумных участков: {m.sum()} кадров")
     t, box, fluxes, bkg, frame_no = t[m], box[m], fluxes[m], bkg[m], frame_no[m]
+
+    # общий лог (QUALITY + локальный шум) -- по нему можно дословно восстановить,
+    # почему выброшен каждый кадр (ROADMAP.md Этап 5, критерий готовности)
+    log_combined = pd.concat([log_quality, log_noise], ignore_index=True).sort_values("FRAME").reset_index(drop=True)
+    log_path = save_cleaning_log(log_combined, STAR_NAME, SECTOR, CUT, suffix="_prf_clean")
+    print(f"\nЛог чистки: {log_path}\n{summarize_cleaning_log(log_combined, total_frames=t_all.size)}")
 
     for j, tag in [(it, "SS397"), (iN, "neighbour")]:
         if j is None:

@@ -32,6 +32,7 @@ from .data_io import (load_tess_cutouts, load_gaia_stars_in_view_data, load_star
                        read_light_curve_csv)
 from .psf import get_tesscut_prf_supersampled, add_prf_cut
 from .photometry import calc_prf_contamination_fraction
+from .cleaning import quality_mask
 
 
 def select_prf_model_stars(gaia_stars_df, target_source_id, box_x0, box_y0, box_size,
@@ -192,11 +193,7 @@ def load_prf_light_curve(star_name, sector, cut_width, cut_height=None, box=13, 
     stars = select_prf_model_stars(gaia_stars, target_source_id, box_x0, box_y0, box, dt_max, merge_px)
     target_idx = int(np.where(stars["source_id"] == target_source_id)[0][0])
 
-    good = np.isfinite(t_all)
-    if quality_bitmask is None:
-        good &= quality == 0
-    elif quality_bitmask:
-        good &= (quality & quality_bitmask) == 0
+    good = np.isfinite(t_all) & quality_mask(quality, quality_bitmask)
 
     x0, y0 = box_x0 - 1, box_y0 - 1
     cube_box = cube[good, x0:x0 + box, y0:y0 + box]
