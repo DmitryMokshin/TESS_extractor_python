@@ -28,23 +28,29 @@ import matplotlib.pyplot as plt
 
 from isolated.lightcurve_tools import local_point_to_point_sigma
 from isolated.prewhitening import amp_spectrum, window_function, prewhiten, red_noise_fit
+from run_config import CONFIG
 
 # =============================================================================
-# НАСТРОЙКИ — правь здесь и жми Run
+# НАСТРОЙКИ — звезда/сектор/вырезка/режим и параметры выбеливания теперь в
+# run_config.py (Этап 4); RUNS ниже строится из него же, чтобы не разъезжаться.
 # =============================================================================
-STAR_DIR = "stars_python/SS_397/50x50"
+STAR_DIR = CONFIG.star_dir
 # какие кривые анализировать: (путь к CSV, метка для имен файлов).
-# Отсутствующие файлы пропускаются с сообщением.
+# Отсутствующие файлы пропускаются с сообщением. Первая запись -- текущий
+# режим по run_config.py; вторая -- сравнение с другим режимом фотометрии;
+# третья -- кривая яркого соседа (ss397_localize.py) для сравнения по частотам.
 RUNS = [
-    (f"{STAR_DIR}/light_curve_sector_80_clean.csv", "ss397_clean"),   # кривая из статьи
-    (f"{STAR_DIR}/light_curve_sector_80_prf_clean.csv", "ss397_prf"),  # PRF-деблендинг, очищенный (ss397_localize.py)
-    ("out_localize/lc_deblended_neighbour.csv", "neighbour"),         # яркий сосед
+    (f"{STAR_DIR}/light_curve_sector_{CONFIG.sector}{CONFIG.lc_suffix}.csv", "primary"),
+    (f"{STAR_DIR}/light_curve_sector_{CONFIG.sector}"
+     f"{'_clean' if CONFIG.photometry_mode == 'prf' else '_prf_clean'}.csv",
+     "aperture_compare" if CONFIG.photometry_mode == "prf" else "prf_compare"),
+    ("out_localize/lc_deblended_neighbour.csv", "neighbour"),
 ]
 OUTDIR = "out_tess"
-FMAX = 10.0          # верхняя частота поиска, 1/сут
-N_MAX = 15           # максимум частот при выбеливании
-DYN_WINDOW = 10.0    # окно динамического спектра, сут
-KAPPA = 2.5          # отбраковка: локальный шум > KAPPA × медиана
+FMAX = CONFIG.prewhiten_fmax   # верхняя частота поиска, 1/сут
+N_MAX = CONFIG.n_max_freq      # максимум частот при выбеливании
+DYN_WINDOW = CONFIG.dyn_window  # окно динамического спектра, сут
+KAPPA = CONFIG.local_noise_kappa  # отбраковка: локальный шум > KAPPA × медиана
 # время наблюдений на БТА (UT); None — не рисовать
 BTA_UT = None        # например ("2024-06-24T19:30", "2024-06-24T22:30")
 SHOW_PLOTS = True    # открыть окна с рисунками в конце (PDF сохраняются всегда)

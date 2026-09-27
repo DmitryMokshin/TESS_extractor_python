@@ -50,16 +50,18 @@ from isolated.psf import get_tesscut_prf_supersampled
 from isolated.geometry import get_nospace_star_name, calc_tess_magnitude
 from isolated.lightcurve_tools import local_point_to_point_sigma
 from isolated.prf_photometry import select_prf_model_stars, build_prf_star_cuts, deblend_prf_flux
+from run_config import CONFIG
 
 # =============================================================================
-# НАСТРОЙКИ — правь здесь и жми Run
+# НАСТРОЙКИ — звезда/сектор/вырезка/чистка теперь в run_config.py (Этап 4);
+# то, что осталось здесь, специфично для этого конкретного исследования.
 # =============================================================================
-STAR_NAME = "SS 397"
-SECTOR = 80
-CUT = 50
-BOX = 13                 # размер окна для PRF-фотометрии (нечетный), пикс
-DT_MAX = 3.5             # включать звезды Gaia не слабее T_target + DT_MAX
-MERGE_PX = 1.0           # звезды ближе MERGE_PX к более яркой не фитуются отдельно (вырождение)
+STAR_NAME = CONFIG.star_name
+SECTOR = CONFIG.sector
+CUT = CONFIG.cut_width
+BOX = CONFIG.prf_box            # размер окна для PRF-фотометрии (нечетный), пикс
+DT_MAX = CONFIG.prf_dt_max       # включать звезды Gaia не слабее T_target + DT_MAX
+MERGE_PX = CONFIG.prf_merge_px   # звезды ближе MERGE_PX к более яркой не фитуются отдельно (вырождение)
 NEIGHBOUR_ID = 4154999332652688000
 TARGET_ID = 4155000844481174656
 # частоты для карт (из анализа clean-кривой), 1/сут
@@ -70,8 +72,8 @@ OUTDIR = "out_localize"
 # Флаги рассеянного света (2048, 4096 и т.п.) НЕ выбрасываем: такие кадры часто
 # нормальные, плохие участки потом отсекаются по локальному шуму.
 # 0 — не использовать флаги вообще; None — брать только QUALITY == 0 (слишком строго для S80).
-QUALITY_BITMASK = 175
-LOCAL_NOISE_KAPPA = 2.5  # отбраковка "_prf_clean": локальный шум > KAPPA × медиана (см. local_point_to_point_sigma)
+QUALITY_BITMASK = CONFIG.quality_bitmask
+LOCAL_NOISE_KAPPA = CONFIG.local_noise_kappa  # отбраковка "_prf_clean": локальный шум > KAPPA × медиана
 RUN_TESS_AFTER = True     # сразу прогнать ss397_tess.analyse по разделенным кривым
 SHOW_PLOTS = True         # открыть окна с рисунками в конце (PDF сохраняются всегда)
 

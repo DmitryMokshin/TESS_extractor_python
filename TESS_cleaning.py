@@ -21,6 +21,7 @@ from isolated.config import TESS_MAX_SECTORS
 from isolated.lightcurve_tools import exclude_frame_windows, pick_exclusion_windows, save_clean_light_curve, \
     save_trash_light_curve
 from isolated.stray_light import pick_stripe_pixels, stray_light_monitor_curve, plot_stray_light_diagnostics
+from run_config import CONFIG
 
 # Как решить, дефект это или настоящая вспышка -- по панелям plot_stray_light_diagnostics:
 #
@@ -40,10 +41,10 @@ from isolated.stray_light import pick_stripe_pixels, stray_light_monitor_curve, 
 # синхронность/корреляция отсутствуют, а яркость локализована именно на звезде — это, скорее всего,
 # настоящая вспышка, точки лучше оставить (или сохранить отдельно для дальнейшего изучения).
 
-STAR_NAME = "EM* AS 14"
-CUT_WIDTH = 15
-CUT_HEIGHT = 15
-TESS_SECTOR = 18
+STAR_NAME = CONFIG.star_name
+CUT_WIDTH = CONFIG.cut_width
+CUT_HEIGHT = CONFIG.cut_height
+TESS_SECTOR = CONFIG.sector
 
 
 def clean_sector(star_name, sector, cut_width, cut_height=None):

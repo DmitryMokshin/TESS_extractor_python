@@ -111,14 +111,14 @@ def periodogram_compute_analise(star_name_process, sector_number, cadr_width_for
 
 
 if __name__ == "__main__":
-    # Звезда / сектор / размер кадра — те же, что в run.py и TESS_cleaning.py (см. README).
-    star_name = "SS 397"
-    sector = 80
-    cadr_width = 50
-    cadr_height = 50
-    # "_clean"      — кривая после TESS_cleaning.py (апертурная фотометрия);
-    # "_prf_clean"  — PRF-кривая из ss397_localize.py (без света соседней звезды).
-    lc_suffix = "_prf_clean"
+    # Звезда / сектор / размер кадра / режим фотометрии -- из run_config.py (Этап 4),
+    # тот же конфиг, что и run.py/TESS_cleaning.py/ss397_localize.py/ss397_tess.py.
+    from run_config import CONFIG
 
-    periodogram_compute_analise(star_name.replace(' ', '_'), sector, cadr_width, cadr_height,
-                                max_peaks_analyse=10, image_format="png", lc_suffix=lc_suffix)
+    periodogram_compute_analise(
+        CONFIG.star_name.replace(' ', '_'), CONFIG.sector, CONFIG.cut_width, CONFIG.cut_height,
+        max_peaks_analyse=CONFIG.max_peaks_analyse, image_format=CONFIG.image_format,
+        nyquist_factor=CONFIG.nyquist_factor, max_period_fraction=CONFIG.max_period_fraction,
+        lc_suffix=CONFIG.lc_suffix, detrend_deg=CONFIG.detrend_deg,
+        prewhiten_fmax=CONFIG.prewhiten_fmax, snr_stop=CONFIG.snr_stop, n_max_freq=CONFIG.n_max_freq,
+        dyn_window=CONFIG.dyn_window, dyn_step=CONFIG.dyn_step, dyn_frange=CONFIG.dyn_frange)
