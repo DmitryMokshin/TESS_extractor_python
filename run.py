@@ -14,9 +14,9 @@ from isolated.config import TESS_MAX_SECTORS
 from isolated.viewer import plot_cuts, save_cutout_video
 from isolated.lightcurve_tools import save_lc_figure
 
-STAR_NAME = "EM* AS 14"
-CUT_WIDTH = 15
-CUT_HEIGHT = 15
+STAR_NAME = "SS 397"
+CUT_WIDTH = 50
+CUT_HEIGHT = 50
 
 
 def print_stage(title, **settings):

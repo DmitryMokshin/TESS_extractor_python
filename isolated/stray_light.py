@@ -90,7 +90,7 @@ def stray_light_monitor_curve(star_name, sector, cut_width, cut_height, pixels, 
     """
     if cut_height is None:
         cut_height = cut_width
-    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory)[sector]
+    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory, sector=sector)[sector]
     flux_cuts = cut_fits[1].data["FLUX"]
     mjds = cut_fits[1].data["TIME"]
     n_cuts = flux_cuts.shape[0]
@@ -153,7 +153,7 @@ def plot_stray_light_diagnostics(star_name, sector, cut_width, cut_height, df_lc
     peak_i = candidate_idx[np.argmax(monitor_flux[candidate_idx])]
     quiet_i = int(np.argmin(np.abs(monitor_flux - np.median(monitor_flux))))
 
-    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory)[sector]
+    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory, sector=sector)[sector]
     flux_cuts = cut_fits[1].data["FLUX"]
     gaia_data = load_star_gaia_data(star_name, star_directory)
     frame_stars_df = load_gaia_stars_in_view_data(star_name, cut_fits, star_directory=star_directory)

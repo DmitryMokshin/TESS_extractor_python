@@ -62,7 +62,7 @@ def suggest_period_range(mjd, nyquist_factor=2.0, max_period_fraction=1.0):
 
 
 def compute_ls_periodogram(df_lc, jd_box=0.1, sigma_tol=10, n_out=20,
-                            period_range=(0.08, 10.0), samples_per_peak=10):
+                            period_range=(0.08, 10.0), samples_per_peak=10, detrend_deg=0):
     """
     Lomb-Scargle periodogram of a light curve's magnitudes (median-subtracted,
     sigma-clipped the same way as `stats.find_period`).
@@ -71,9 +71,17 @@ def compute_ls_periodogram(df_lc, jd_box=0.1, sigma_tol=10, n_out=20,
     `ls` the astropy `LombScargle` instance (needed for
     false_alarm_probability/false_alarm_level -- see `find_periodogram_peaks`
     and `save_periodogram`).
+
+    `detrend_deg` > 0 subtracts a polynomial of that degree in time first.
+    Without it a slow trend over the sector leaks into the lowest frequencies
+    (the highest "peak" then sits at 1/T or 2/T -- an artefact, not a period).
+    Default 0 keeps the old behaviour.
     """
     cleaned_jds, cleaned_mags = cleaned_jds_mags(df_lc, jd_box, sigma_tol, n_out)
     y = cleaned_mags - np.median(cleaned_mags)
+    if detrend_deg > 0:
+        x = cleaned_jds - cleaned_jds.mean()
+        y = y - np.polyval(np.polyfit(x, y, detrend_deg), x)
 
     ls = LombScargle(cleaned_jds, y)
     min_freq = 1.0 / period_range[1]

@@ -29,6 +29,11 @@ from .periodogram import (
     fit_multi_sine, fit_periodogram_approximation, plot_periodogram_approximation,
     suggest_period_range,
 )
+from .prewhitening import (
+    amp_spectrum, window_function, prewhiten, multisine_model, format_frequency_table,
+    save_frequency_table, plot_amplitude_spectrum, dynamic_spectrum, plot_dynamic_spectrum,
+    plot_prewhitening_fit,
+)
 from .stray_light import (
     pick_stripe_pixels, stray_light_monitor_curve, plot_stray_light_diagnostics, correct_stray_light,
 )
@@ -50,5 +55,8 @@ __all__ = [
     "compute_ls_periodogram", "find_periodogram_peaks", "save_periodogram", "plot_periodogram",
     "fit_multi_sine", "fit_periodogram_approximation", "plot_periodogram_approximation",
     "suggest_period_range",
+    "amp_spectrum", "window_function", "prewhiten", "multisine_model", "format_frequency_table",
+    "save_frequency_table", "plot_amplitude_spectrum", "dynamic_spectrum", "plot_dynamic_spectrum",
+    "plot_prewhitening_fit",
     "pick_stripe_pixels", "stray_light_monitor_curve", "plot_stray_light_diagnostics", "correct_stray_light",
 ]

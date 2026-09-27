@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import zipfile
 
 import numpy as np
@@ -143,9 +144,17 @@ def load_star_gaia_data(star_name, star_directory=STAR_DIRECTORY) -> pd.Series:
     return _read_gaia_csv(gaia_data_file).iloc[0]
 
 
-def load_tess_cutouts(star_name, cut_width, cut_height=None, star_directory=STAR_DIRECTORY):
+def load_tess_cutouts(star_name, cut_width, cut_height=None, star_directory=STAR_DIRECTORY, sector=None):
     """
     Direct port of `load_tess_cutouts`. Returns a dict {sector_int: fits.HDUList}.
+
+    `sector`: if given and not already present in the cached zip, downloads
+    just that one sector instead of every sector the star was ever observed
+    in (see `tess_queries.get_tess_cutouts`'s `sector` parameter) -- much
+    faster, and avoids astroquery's "Timeout limit of 600 exceeded" on a
+    large cutout or many sectors (see tesscut_timeout_notes.dat). Default
+    (`sector=None`) is the original behaviour, unchanged: on a fresh cache,
+    fetch every sector at once.
     """
     if cut_height is None:
         cut_height = cut_width
@@ -160,9 +169,20 @@ def load_tess_cutouts(star_name, cut_width, cut_height=None, star_directory=STAR
     cutouts_dir = os.path.join(out_dir, f"{cut_width}x{cut_height}")
     cutouts_file = os.path.join(cutouts_dir, f"{nospace}.zip")
 
-    if not os.path.isfile(cutouts_file):
+    need_download = not os.path.isfile(cutouts_file)
+    if not need_download and sector is not None:
+        with zipfile.ZipFile(cutouts_file) as archive:
+            cached_sectors = set()
+            for name in archive.namelist():
+                match = re.match(r"tess-sector(\d+)-cutout\.fits$", name)
+                if match:
+                    cached_sectors.add(int(match.group(1)))
+        need_download = sector not in cached_sectors
+
+    if need_download:
         os.makedirs(cutouts_dir, exist_ok=True)
-        _download_tess_cutouts(ra, dec, cut_width, cut_height, star_name=star_name, star_directory=star_directory)
+        _download_tess_cutouts(ra, dec, cut_width, cut_height, star_name=star_name,
+                                star_directory=star_directory, sector=sector)
 
     result = {}
     with zipfile.ZipFile(cutouts_file) as archive:
@@ -307,7 +327,7 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
     if cut_height is None:
         cut_height = cut_width
 
-    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory)[sector]
+    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory, sector=sector)[sector]
     flux_cuts = cut_fits[1].data["FLUX"]  # shape (n_cuts, height, width)
     n_cuts = flux_cuts.shape[0]
     mjds = cut_fits[1].data["TIME"]

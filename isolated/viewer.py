@@ -60,7 +60,7 @@ def _load_cutout_scene(star_name, sector, cut_width, cut_height, aperture_radius
     `save_cutout_video` (rendered to a file): TESS cutout + light curve +
     Gaia star positions + PRF background-pixel mask.
     """
-    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory)[sector]
+    cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory, sector=sector)[sector]
     flux_cuts = cut_fits[1].data["FLUX"]
     n_cuts = flux_cuts.shape[0]
 
