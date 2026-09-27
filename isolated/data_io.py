@@ -45,15 +45,22 @@ def read_light_curve_csv(path: str) -> pd.DataFrame:
     Read a light-curve CSV (`load_light_curve`/`prf_photometry.
     load_prf_light_curve` output, or anything with the same column
     convention), tolerating old cached files written before ROADMAP.md's
-    Этап 1: they call the time column "MJD" (it was always really BTJD --
-    see CLAUDE.md) and have no `FRAME`/`CADENCENO`/`QUALITY`/... columns at
-    all. New files already say "BTJD"; old ones get renamed on the fly so
-    every caller can just use `df["BTJD"]` either way. Not a Julia port --
-    same self-healing idea as `_read_gaia_csv`, for a different file family.
+    Этап 1/2: they call the time column "MJD" (it was always really BTJD --
+    see CLAUDE.md), have no `FRAME`/`CADENCENO`/`QUALITY`/`FLUX_ERR`/...
+    columns at all, and call the star/background aperture ratio "SN" (it
+    was never a signal-to-noise ratio -- see CLAUDE.md). New files already
+    say "BTJD"/"STAR_BKG_RATIO"; old ones get renamed on the fly so every
+    caller can just use the new names either way. Not a Julia port -- same
+    self-healing idea as `_read_gaia_csv`, for a different file family.
     """
     df = pd.read_csv(path)
+    renames = {}
     if "BTJD" not in df.columns and "MJD" in df.columns:
-        df = df.rename(columns={"MJD": "BTJD"})
+        renames["MJD"] = "BTJD"
+    if "STAR_BKG_RATIO" not in df.columns and "SN" in df.columns:
+        renames["SN"] = "STAR_BKG_RATIO"
+    if renames:
+        df = df.rename(columns=renames)
     return df
 
 
@@ -339,7 +346,7 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
     """
     from .psf import get_tesscut_prf_supersampled
     from .photometry import (find_background_prf_gaia_mags, calc_aperture_prf_correction,
-                              calc_aperture_photometry_with_diagnostics,
+                              calc_aperture_photometry_with_diagnostics, calc_aperture_flux_error,
                               calc_prf_contamination_fraction)
     from .geometry import calc_tess_flux_from_mag
 
@@ -349,6 +356,7 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
     cut_fits = load_tess_cutouts(star_name, cut_width, cut_height, star_directory, sector=sector)[sector]
     flux_cuts = cut_fits[1].data["FLUX"]  # shape (n_cuts, height, width)
     flux_bkg_cuts = cut_fits[1].data["FLUX_BKG"]
+    flux_err_cuts = cut_fits[1].data["FLUX_ERR"]
     n_cuts = flux_cuts.shape[0]
     mjds = cut_fits[1].data["TIME"]
     cadenceno = cut_fits[1].data["CADENCENO"]
@@ -385,6 +393,9 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
         def frame_bkg(i):
             return flux_bkg_cuts[i].T
 
+        def frame_err(i):
+            return flux_err_cuts[i].T
+
         bkg_pixels = find_background_prf_gaia_mags(frame(n_cuts // 4), prf, stars_x, stars_y, stars_mag)
 
         aperture_correction = calc_aperture_prf_correction(aperture_radius, star_px[0], star_px[1], prf, cut_height)
@@ -402,10 +413,13 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
         flux_bkg = np.zeros(n_cuts)
         centroid_x = np.zeros(n_cuts)
         centroid_y = np.zeros(n_cuts)
+        flux_err = np.zeros(n_cuts)
         for i in tqdm(range(n_cuts), desc=f"{star_name} sector {sector}: photometry", unit="frame"):
             phot_flux[i], sn[i], flux_bkg[i], centroid_x[i], centroid_y[i] = calc_aperture_photometry_with_diagnostics(
                 frame(i), frame_bkg(i), bkg_pixels, star_px[0], star_px[1], aperture_radius)
+            flux_err[i] = calc_aperture_flux_error(frame_err(i), star_px[0], star_px[1], aperture_radius)
         phot_flux *= aperture_correction
+        flux_err *= aperture_correction
 
         lc_df = pd.DataFrame({
             "BTJD": mjds,
@@ -413,8 +427,9 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
             "CADENCENO": cadenceno,
             "QUALITY": quality,
             "FLUX": phot_flux,
+            "FLUX_ERR": flux_err,
             "MAG": calc_tess_magnitude(np.abs(phot_flux)),
-            "SN": sn,
+            "STAR_BKG_RATIO": sn,
             "FLUX_BKG": flux_bkg,
             "POS_CORR1": pos_corr1,
             "POS_CORR2": pos_corr2,

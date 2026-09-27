@@ -26,7 +26,7 @@ source .venv/bin/activate   # или используйте .venv/bin/python н�
 
 | Файл | Кем создаётся |
 |---|---|
-| `light_curve_sector_{N}.csv` | `load_light_curve` (сырая кривая: `BTJD, FRAME, CADENCENO, QUALITY, FLUX, MAG, SN, FLUX_BKG, POS_CORR1, POS_CORR2, CENTROID_X, CENTROID_Y`; старые файлы — только `MJD, FLUX, MAG, SN`, читаются через `read_light_curve_csv`) |
+| `light_curve_sector_{N}.csv` | `load_light_curve` (сырая кривая: `BTJD, FRAME, CADENCENO, QUALITY, FLUX, FLUX_ERR, MAG, STAR_BKG_RATIO, FLUX_BKG, POS_CORR1, POS_CORR2, CENTROID_X, CENTROID_Y`; старые файлы — `MJD, FLUX, MAG, SN`, читаются через `read_light_curve_csv`, который на лету переименовывает `MJD`→`BTJD` и `SN`→`STAR_BKG_RATIO`) |
 | `light_curve_sector_{N}_clean.csv` | `save_clean_light_curve` (после чистки) |
 | `light_curve_sector_{N}_trash_frames_{...}.csv` | `save_trash_light_curve` (что вырезано) |
 | `periodogram_sector_{N}.dat` / `.png` / `.eps` | `save_periodogram` / `plot_periodogram` |

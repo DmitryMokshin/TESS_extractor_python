@@ -127,6 +127,25 @@ def calc_aperture_photometry_with_diagnostics(cut, flux_bkg_cut, bkg_positions, 
     return phot, sn, flux_bkg, centroid_x, centroid_y
 
 
+def calc_aperture_flux_error(flux_err_cut, star_px_x, star_px_y, aperture_radius):
+    """
+    Formal per-frame flux error, propagated from TESScut's own per-pixel
+    `FLUX_ERR` through the aperture sum: sigma_total = sqrt(sum_i w_i *
+    sigma_i^2) over the aperture's pixels (fractional weights w_i at the
+    aperture edge, "exact" method -- the standard aperture-photometry error
+    formula, same convention lightkurve/SPOC use). Reuses `aperture_sum` on
+    the per-pixel variance map (`flux_err_cut ** 2`) rather than a separate
+    photutils call, since `aperture_sum` already does exactly this
+    fractional-pixel-weighted summing.
+
+    Does not include the uncertainty from the background-plane fit
+    (`fit_flat_background`) -- just the propagated pixel-level FLUX_ERR,
+    per ROADMAP.md Этап 2. Not a Julia port.
+    """
+    variance_sum = aperture_sum(flux_err_cut ** 2, star_px_x, star_px_y, aperture_radius)
+    return float(np.sqrt(max(variance_sum, 0.0)))
+
+
 def _fit_plane(bkg_fluxes, bkg_xs, bkg_ys, cut_width, cut_height):
     """
     Shared plane-fit core of fit_flat_background / fit_flat_background_precise_indeces.
