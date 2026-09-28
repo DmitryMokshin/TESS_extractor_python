@@ -27,7 +27,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from isolated.lightcurve_tools import local_point_to_point_sigma
-from isolated.prewhitening import amp_spectrum, window_function, prewhiten, red_noise_fit
+from isolated.prewhitening import (amp_spectrum, window_function, prewhiten, red_noise_fit,
+                                   find_combination_frequencies, bootstrap_frequency_errors,
+                                   split_half_frequency_errors, frequency_stability,
+                                   plot_frequency_stability, clean_periodogram, plot_clean_spectrum)
 from run_config import CONFIG
 
 # =============================================================================
@@ -54,6 +57,20 @@ KAPPA = CONFIG.local_noise_kappa  # отбраковка: локальный ш�
 # время наблюдений на БТА (UT); None — не рисовать
 BTA_UT = None        # например ("2024-06-24T19:30", "2024-06-24T22:30")
 SHOW_PLOTS = True    # открыть окна с рисунками в конце (PDF сохраняются всегда)
+
+# --- частотный анализ, дальше (ROADMAP.md Этап 8) -- специфично для этого
+# исследования (как FREQS/NEIGHBOUR_ID в ss397_localize.py), не в run_config.py.
+# По умолчанию в analyse() всё это выключено (не меняет скорость/поведение,
+# пока явно не включено) -- здесь включено, чтобы реально проверить на SS 397.
+N_SIGMA_COMBINATION = 3.0    # допуск комбинационных частот, x sigma_f вместо 0.5/T
+DO_BOOTSTRAP = True          # ошибки частот бутстрепом + по двум половинам ряда
+N_BOOT = 200
+DO_STABILITY = True          # амплитуда/фаза найденных частот по скользящему окну
+STABILITY_WINDOW = 10.0      # сут
+STABILITY_STEP = 1.0         # сут
+DO_CLEAN = True               # опция CLEAN (Roberts et al. 1987)
+CLEAN_GAIN = 0.2
+CLEAN_NITER = 150
 
 # =============================================================================
 PPT2MMAG = 2.5 / np.log(10)   # 1 ppt ≈ 1.086 mmag
@@ -103,7 +120,10 @@ def segments(t, mask):
 # основной анализ
 # =============================================================================
 def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.0,
-            bta_ut=None, kappa=2.5):
+            bta_ut=None, kappa=2.5, n_sigma_combination=3.0,
+            do_bootstrap=False, n_boot=200,
+            do_stability=False, stability_window=10.0, stability_step=1.0,
+            do_clean=False, clean_gain=0.2, clean_niter=150):
     os.makedirs(outdir, exist_ok=True)
     t, f = load_lc(path)
     y = (f / np.median(f) - 1) * 1e3                        # ppt
@@ -135,7 +155,8 @@ def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.
         res, fg, Ares = extra["residuals"], extra["grid"], extra["amp_residuals"]
         rn = extra.get("noise_model") or red_noise_fit(fg, Ares)[0]
         D, sN = extra["D"], extra["sigma_res"]
-        results[label] = dict(t=tt, y=yy, fr=fr, am=am, sf=sf, sa=sa, res=res, fg=fg, Ares=Ares, rn=rn)
+        results[label] = dict(t=tt, y=yy, fr=fr, am=am, sf=sf, sa=sa, res=res, fg=fg, Ares=Ares, rn=rn,
+                              peaks=peaks, extra=extra)
 
         P(f"\n## набор '{label}': N = {tt.size}, σ(остатков) = {sN:.2f} ppt, D = {D:.1f}")
         P("   nu, 1/сут        P, сут            A, ppt        A, mmag   S/N_лок  S/N_красн  примечание")
@@ -152,17 +173,51 @@ def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.
             sper = sf[i] / x ** 2
             P(f"   {x:.4f}±{sf[i]:.4f}   {per:8.4f}±{sper:6.4f}   {a:6.2f}±{sa[i]:.2f}   {a * PPT2MMAG:6.2f}"
               f"   {snr_loc[i]:6.1f}   {snr_red[i]:7.1f}   {'; '.join(note)}")
-        # гармоники и комбинации: только для 5 самых сильных "родителей",
-        # допуск 0.5/T, "ребенок" слабее обоих родителей
-        top = np.argsort(am)[::-1][:5]
-        for ii, i in enumerate(top):
-            for j in top[ii:]:
-                for s_, lab in [(fr[i] + fr[j], "+"), (abs(fr[i] - fr[j]), "-")]:
-                    for k in range(len(fr)):
-                        if (k not in (i, j) and abs(fr[k] - s_) < 0.5 / T
-                                and am[k] < min(am[i], am[j])):
-                            P(f"   комбинация? ν={fr[k]:.4f} ≈ {fr[i]:.4f} {lab} {fr[j]:.4f} = {s_:.4f}")
+        # гармоники и комбинации: 5 самых сильных "родителей", допуск по ошибкам
+        # частот (ROADMAP.md Этап 8), не захардкоженный 0.5/T
+        for c in find_combination_frequencies(peaks, n_top=5, n_sigma=n_sigma_combination):
+            i, j, k = c["parent1"], c["parent2"], c["child"]
+            P(f"   комбинация? ν={fr[k]:.4f} ≈ {fr[i]:.4f} {c['kind']} {fr[j]:.4f} = "
+              f"{c['predicted']:.4f} (допуск ±{c['tolerance']:.4f})")
         results[label]["table"] = (fr, sf, am, sa, snr_loc, snr_red)
+
+    # ---------------- Этап 8: бутстреп/сплит-half, стабильность, CLEAN ----------------
+    # все три -- на наборе 'strict' (научно значимый), опциональны (см. do_bootstrap/
+    # do_stability/do_clean) -- не меняют время выполнения/поведение по умолчанию
+    Rs = results["strict"]
+    if do_bootstrap and len(Rs["peaks"]):
+        boot = bootstrap_frequency_errors(Rs["t"], Rs["y"], Rs["peaks"], Rs["extra"], n_boot=n_boot)
+        first, second = split_half_frequency_errors(Rs["t"], Rs["y"], Rs["peaks"])
+        P("\nПроверка ошибок Montgomery & O'Donoghue (1999) (набор 'strict', бутстреп "
+          f"n={n_boot}, по двум половинам ряда):")
+        P("   nu, 1/сут   sigma_f формула   sigma_f бутстреп   |half1 - half2|")
+        for i, p in enumerate(Rs["peaks"]):
+            half_diff = abs(first["frequency"][i] - second["frequency"][i])
+            P(f"   {p['frequency']:.4f}      {p['frequency_err']:.5f}         "
+              f"{boot['frequency'][i]:.5f}          {half_diff:.5f}")
+
+    if do_stability and len(Rs["peaks"]):
+        group_freqs = [p["frequency"] for p in Rs["peaks"] if p["frequency"] > 2.0 / T_all]
+        if group_freqs:
+            centers, amps_w, phases_w = frequency_stability(Rs["t"], Rs["y"], group_freqs,
+                                                             window=stability_window, step=stability_step)
+            plot_frequency_stability(centers, amps_w, phases_w, group_freqs, units="ppt",
+                                     window=stability_window, title=f"{tag}: amplitude/phase stability",
+                                     out_path=os.path.join(outdir, f"{tag}_stability.pdf"))
+            P(f"\nСтабильность по скользящему окну ({stability_window:.0f} сут): "
+              f"{outdir}/{tag}_stability.pdf")
+
+    if do_clean and len(Rs["peaks"]):
+        clean_freqs = np.arange(0.5 / T_all, fmax, 1.0 / (3 * T_all))
+        components, _clean_resid, dirty = clean_periodogram(Rs["t"], Rs["y"], clean_freqs,
+                                                             gain=clean_gain, n_iter=clean_niter)
+        plot_clean_spectrum(clean_freqs, dirty, components, units="ppt", title=f"{tag}: CLEAN",
+                            out_path=os.path.join(outdir, f"{tag}_clean.pdf"))
+        top_components = sorted(components, key=lambda c: -c["amplitude"])[:10]
+        P(f"\nCLEAN (Roberts et al. 1987): {len(components)} компонент "
+          f"(gain={clean_gain}, до {clean_niter} итераций), сильнейшие:")
+        for c in top_components:
+            P(f"   ν={c['frequency']:.4f} 1/сут   A={c['amplitude']:.2f} ppt")
 
     # ---------------- рисунки ----------------
     R = results["strict"]
@@ -288,7 +343,11 @@ def run_all(runs=None, show=SHOW_PLOTS):
             print(f"[пропуск] нет файла {path}")
             continue
         print("\n" + "=" * 70 + f"\n{tag}: {path}\n" + "=" * 70)
-        analyse(path, tag, OUTDIR, FMAX, nmax=N_MAX, dyn_win=DYN_WINDOW, bta_ut=BTA_UT, kappa=KAPPA)
+        analyse(path, tag, OUTDIR, FMAX, nmax=N_MAX, dyn_win=DYN_WINDOW, bta_ut=BTA_UT, kappa=KAPPA,
+               n_sigma_combination=N_SIGMA_COMBINATION,
+               do_bootstrap=DO_BOOTSTRAP, n_boot=N_BOOT,
+               do_stability=DO_STABILITY, stability_window=STABILITY_WINDOW, stability_step=STABILITY_STEP,
+               do_clean=DO_CLEAN, clean_gain=CLEAN_GAIN, clean_niter=CLEAN_NITER)
         done.append(tag)
     print(f"\nГотово: {', '.join(done) or 'ничего'} -> {OUTDIR}/")
     if show and done:

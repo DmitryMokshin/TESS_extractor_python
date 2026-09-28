@@ -37,15 +37,25 @@ POLY_DEG = 2   # degree of the slow trend fitted together with the sinusoids
 # Spectra
 # --------------------------------------------------------------------------- #
 
-def amp_spectrum(t, y, freqs, chunk=400):
-    """Amplitude spectrum (DFT), in units of y: A(f) = 2/N |sum y exp(-2 pi i f t)|."""
+def complex_spectrum(t, y, freqs, chunk=400):
+    """
+    Complex DFT, in units of y: A(f) = 2/N sum y exp(-2 pi i f t). `amp_spectrum`
+    is `np.abs(complex_spectrum(...))` -- this is the complex version ROADMAP.md
+    Этап 8's CLEAN (`clean_periodogram`) needs, to read off both the amplitude
+    AND phase of the strongest residual peak at each iteration.
+    """
     t = np.asarray(t, float)
     y = np.asarray(y, float) - np.mean(y)
-    out = np.empty(freqs.size)
+    out = np.empty(freqs.size, dtype=complex)
     for k in range(0, freqs.size, chunk):
         ph = np.exp(-2j * np.pi * np.outer(freqs[k:k + chunk], t))
-        out[k:k + chunk] = 2.0 / t.size * np.abs(ph @ y)
+        out[k:k + chunk] = 2.0 / t.size * (ph @ y)
     return out
+
+
+def amp_spectrum(t, y, freqs, chunk=400):
+    """Amplitude spectrum (DFT), in units of y: A(f) = 2/N |sum y exp(-2 pi i f t)|."""
+    return np.abs(complex_spectrum(t, y, freqs, chunk))
 
 
 def window_function(t, freqs, f0):
@@ -228,6 +238,87 @@ def prewhiten(t, y, fmax, fmin=None, oversample=10, nmax=15, snr_stop=4.0, box=1
     return out, extra
 
 
+# --------------------------------------------------------------------------- #
+# Error checks: bootstrap and split-half (ROADMAP.md Этап 8)
+# --------------------------------------------------------------------------- #
+
+def bootstrap_frequency_errors(t, y, peaks, extra, n_boot=200, halfwidth=None, rng=None):
+    """
+    Residual-bootstrap empirical std of each found frequency/amplitude/phase --
+    an independent, formula-free check on `errors_mo99`'s Montgomery & O'Donoghue
+    (1999) sigma_f (ROADMAP.md Этап 8, "ошибки частот бутстрепом по остаткам").
+    Resamples `extra["residuals"]` (the final `prewhiten` residuals) WITH
+    replacement, adds them back onto the fitted model, and refits the SAME
+    frequencies each time via `fit_all`, anchored within `halfwidth` (default
+    0.5/T) so bootstrap noise can't swap or merge close frequencies.
+
+    Returns `{"frequency": std_array, "amplitude": std_array, "phase": std_array}`,
+    one value per peak, same order as `peaks`.
+    """
+    if not peaks:
+        return {"frequency": np.array([]), "amplitude": np.array([]), "phase": np.array([])}
+    t = np.asarray(t, float)
+    y = np.asarray(y, float)
+    rng = rng or np.random.default_rng()
+    if halfwidth is None:
+        halfwidth = 0.5 / extra["T"]
+    residuals = extra["residuals"]
+    model_t = y - residuals
+    freqs0 = [p["frequency"] for p in peaks]
+    amps0 = [p["amplitude"] for p in peaks]
+    phases0 = [p["phase"] for p in peaks]
+
+    fr_boot = np.empty((n_boot, len(peaks)))
+    am_boot = np.empty((n_boot, len(peaks)))
+    ph_boot = np.empty((n_boot, len(peaks)))
+    for i in range(n_boot):
+        y_boot = model_t + rng.choice(residuals, size=t.size, replace=True)
+        fr_b, am_b, ph_b, _ = fit_all(t, y_boot, freqs0, amps0, phases0,
+                                      anchors=freqs0, halfwidth=halfwidth)
+        fr_boot[i], am_boot[i], ph_boot[i] = fr_b, am_b, ph_b
+
+    return {"frequency": fr_boot.std(axis=0), "amplitude": am_boot.std(axis=0),
+            "phase": ph_boot.std(axis=0)}
+
+
+def split_half_frequency_errors(t, y, peaks, halfwidth=None):
+    """
+    Fit the found frequencies independently on the first and second half of the
+    time series (split at the median time) -- an independent, formula-free error
+    estimate (ROADMAP.md Этап 8, "...и по двум половинам ряда"): how much do the
+    frequencies/amplitudes/phases differ between two halves of the same run? Not
+    a replacement for `errors_mo99`'s sigma_f, a cross-check on it.
+
+    `halfwidth` (default 1/T_half, generous -- unlike the bootstrap's tighter
+    anchor, this must let each half's fit actually reflect its own resolution,
+    not be clamped back toward the full-series value) bounds how far a
+    frequency may move from its full-series value on each half.
+
+    Returns `(first, second)`, each `{"frequency": array, "amplitude": array,
+    "phase": array}`, one value per peak (same order as `peaks`). A caller
+    compares e.g. `abs(first["frequency"] - second["frequency"])` against
+    `sigma_f * sqrt(2)` (two independent formal errors) or similar.
+    """
+    if not peaks:
+        empty = {"frequency": np.array([]), "amplitude": np.array([]), "phase": np.array([])}
+        return empty, dict(empty)
+    t = np.asarray(t, float)
+    y = np.asarray(y, float)
+    freqs0 = [p["frequency"] for p in peaks]
+    amps0 = [p["amplitude"] for p in peaks]
+    phases0 = [p["phase"] for p in peaks]
+
+    tmid = np.median(t)
+    results = []
+    for mask in (t <= tmid, t > tmid):
+        t_h, y_h = t[mask], y[mask]
+        hw = halfwidth if halfwidth is not None else 1.0 / (t_h.max() - t_h.min())
+        fr_h, am_h, ph_h, _ = fit_all(t_h, y_h, freqs0, amps0, phases0,
+                                      anchors=freqs0, halfwidth=hw)
+        results.append({"frequency": fr_h, "amplitude": am_h, "phase": ph_h})
+    return results[0], results[1]
+
+
 def multisine_model(t_eval, t, y, frequencies):
     """Linear LSQ of trend + sinusoids at FIXED frequencies; returns model at t_eval."""
     t0 = t.mean()
@@ -262,6 +353,42 @@ def save_frequency_table(path, peaks, header_lines=(), units="mmag"):
             fo.write(f"# {h}\n")
         fo.write(format_frequency_table(peaks, units) + "\n")
     return path
+
+
+def find_combination_frequencies(peaks, n_top=5, n_sigma=3.0):
+    """
+    For the `n_top` strongest "parent" frequencies, check every other (weaker)
+    frequency against their sum/difference -- same search `ss397_tess.py` used
+    to do inline, but with the tolerance now `n_sigma * sqrt(sigma_f_i^2 +
+    sigma_f_j^2 + sigma_f_k^2)` (each peak's own `frequency_err` from
+    `errors_mo99`) instead of a flat `0.5/T` (ROADMAP.md Этап 8, "комбинационные
+    частоты с допуском по ошибкам, а не просто 0.5/T").
+
+    Returns a list of dicts `{child, parent1, parent2, kind ('+'/'-'),
+    predicted, tolerance}` -- `child`/`parent1`/`parent2` are indices into
+    `peaks`.
+    """
+    n = len(peaks)
+    if n == 0:
+        return []
+    amps = np.array([p["amplitude"] for p in peaks])
+    freqs = np.array([p["frequency"] for p in peaks])
+    sigmas = np.array([p["frequency_err"] for p in peaks])
+    top = np.argsort(amps)[::-1][:n_top]
+
+    combinations = []
+    for ii, i in enumerate(top):
+        for j in top[ii:]:
+            for kind, predicted in [("+", freqs[i] + freqs[j]), ("-", abs(freqs[i] - freqs[j]))]:
+                for k in range(n):
+                    if k in (i, j) or amps[k] >= min(amps[i], amps[j]):
+                        continue
+                    tolerance = n_sigma * np.sqrt(sigmas[i] ** 2 + sigmas[j] ** 2 + sigmas[k] ** 2)
+                    if abs(freqs[k] - predicted) < tolerance:
+                        combinations.append({"child": int(k), "parent1": int(i), "parent2": int(j),
+                                             "kind": kind, "predicted": float(predicted),
+                                             "tolerance": float(tolerance)})
+    return combinations
 
 
 def plot_amplitude_spectrum(t, y, peaks, extra, fmax, units="mmag", zoom=None, title=None,
@@ -353,6 +480,71 @@ def plot_dynamic_spectrum(centers, freqs, dyn, peaks=(), units="mmag", window=10
     return out_path or fig
 
 
+def frequency_stability(t, y, frequencies, window=10.0, step=1.0, min_fill=0.5):
+    """
+    Track each of the given (already found, FIXED) `frequencies`' amplitude and
+    phase in a sliding window of `window` days moved by `step` days -- shows
+    whether a real signal's amplitude/phase drifts or modulates over the run
+    (ROADMAP.md Этап 8, "стабильность амплитуд и фаз: подгонка найденных частот
+    в скользящих окнах"). Complementary to `dynamic_spectrum` (which scans a
+    frequency RANGE per window to find where power sits, for when you don't yet
+    know the frequency); this tracks specific, already-known frequencies
+    precisely via a linear fit (`_phase_guess`) instead of a spectrum scan.
+
+    Same gap-handling convention as `dynamic_spectrum`: a window with fewer than
+    `min_fill` of the expected point count (given the median cadence) is
+    skipped (NaN). Each window is locally detrended (`detrend_poly`, same
+    default degree as `dynamic_spectrum` uses) before the fit, same reasoning:
+    a window's own slow local drift shouldn't bias its amplitude/phase estimate.
+
+    Returns `(centers, amplitudes[len(centers), len(frequencies)],
+    phases[len(centers), len(frequencies)])`.
+    """
+    t = np.asarray(t, float)
+    y = np.asarray(y, float)
+    frequencies = np.asarray(frequencies, dtype=float)
+    centers = np.arange(t.min() + window / 2, t.max() - window / 2 + 1e-9, step)
+    amplitudes = np.full((centers.size, frequencies.size), np.nan)
+    phases = np.full((centers.size, frequencies.size), np.nan)
+    cadence = np.median(np.diff(t))
+    for i, c in enumerate(centers):
+        m = np.abs(t - c) < window / 2
+        if m.sum() < min_fill * window / cadence:        # too many gaps in the window
+            continue
+        t_w = t[m]
+        y_w = detrend_poly(t_w, y[m])
+        for j, f in enumerate(frequencies):
+            amp, phase = _phase_guess(t_w, y_w, f)
+            amplitudes[i, j] = amp
+            phases[i, j] = phase
+    return centers, amplitudes, phases
+
+
+def plot_frequency_stability(centers, amplitudes, phases, frequencies, units="mmag", window=10.0,
+                             title=None, out_path=None, figsize=(8, 5)):
+    """
+    Amplitude and phase of each tracked frequency over time -- one line per
+    frequency, two panels (amplitude, phase), same sliding-window convention as
+    `dynamic_spectrum`/`plot_dynamic_spectrum`.
+    """
+    frequencies = np.asarray(frequencies, dtype=float)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
+    for j, f in enumerate(frequencies):
+        ax1.plot(centers, amplitudes[:, j], ".-", ms=3, lw=0.8, label=f"{f:.4f} 1/d")
+        ax2.plot(centers, phases[:, j], ".", ms=3)
+    ax1.set_ylabel(f"Amplitude, {units}")
+    ax1.legend(fontsize=7, ncol=min(len(frequencies), 4) or 1)
+    ax2.set_ylabel("Phase")
+    ax2.set_xlabel(f"Window centre ({window:g} d)")
+    if title:
+        ax1.set_title(title)
+    fig.tight_layout()
+    if out_path:
+        fig.savefig(out_path, dpi=150)
+    plt.show()
+    return out_path or fig
+
+
 def plot_prewhitening_fit(t, y, peaks, units="mmag", title=None, out_path=None, figsize=(8, 3),
                           data_color="purple", fit_color="green", invert=True):
     """
@@ -376,6 +568,81 @@ def plot_prewhitening_fit(t, y, peaks, units="mmag", title=None, out_path=None, 
     if title:
         ax.set_title(title)
     ax.legend(fontsize=7, framealpha=1)
+    fig.tight_layout()
+    if out_path:
+        fig.savefig(out_path, dpi=150)
+    plt.show()
+    return out_path or fig
+
+
+# --------------------------------------------------------------------------- #
+# CLEAN (Roberts, Lehar & Dreher 1987) -- ROADMAP.md Этап 8
+# --------------------------------------------------------------------------- #
+
+def clean_periodogram(t, y, freqs, gain=0.2, n_iter=200, stop_fraction=0.05):
+    """
+    CLEAN deconvolution (Roberts, Lehar & Dreher 1987) for an unevenly-sampled
+    time series -- ROADMAP.md Этап 8, "опция CLEAN... для сравнения с
+    программами коллег". Formulated in the TIME domain (subtract a scaled,
+    phase-matched sinusoid from the residual light curve at each iteration)
+    rather than the classical "subtract a scaled dirty beam from the spectrum"
+    formulation: by linearity of the DFT the two are equivalent, but the
+    time-domain version needs no separate complex spectral-window machinery --
+    subtracting the right sinusoid from the data automatically removes the
+    correctly phase-aligned amount from every frequency in the spectrum,
+    sidelobes included.
+
+    At each iteration: find the strongest peak (by magnitude) in the residual's
+    complex spectrum (`complex_spectrum`) over `freqs`, subtract `gain` of a
+    matching sinusoid from the residual light curve, and record a CLEAN
+    component (frequency, amplitude, phase in the module's own
+    `sin(2*pi*(f*t+phase))` convention). Stops after `n_iter` iterations or
+    once the strongest residual peak drops below `stop_fraction` of the very
+    first (dirty) peak.
+
+    Returns `(components, residual, dirty_amp)`: `components` is a list of
+    dicts `{frequency, amplitude, phase}` (one per CLEAN iteration -- not
+    merged by frequency, several may land near the same real peak),
+    `residual` the final residual light curve (same shape as `y`), `dirty_amp`
+    the original (pre-CLEAN) amplitude spectrum over `freqs`, for a
+    before/after comparison plot (see `plot_clean_spectrum`).
+    """
+    t = np.asarray(t, float)
+    residual = np.asarray(y, float) - np.mean(y)
+    dirty_amp = amp_spectrum(t, residual, freqs)
+    a0 = None
+    components = []
+    for _ in range(n_iter):
+        spec = complex_spectrum(t, residual, freqs)
+        idx = int(np.argmax(np.abs(spec)))
+        amp = float(np.abs(spec[idx]))
+        if a0 is None:
+            a0 = amp
+        if amp < stop_fraction * a0:
+            break
+        f0 = float(freqs[idx])
+        angle = float(np.angle(spec[idx]))
+        residual = residual - gain * amp * np.cos(2 * np.pi * f0 * t + angle)
+        phase = (angle / (2 * np.pi) + 0.25) % 1
+        components.append({"frequency": f0, "amplitude": gain * amp, "phase": phase})
+    return components, residual, dirty_amp
+
+
+def plot_clean_spectrum(freqs, dirty_amp, components, units="mmag", title=None, out_path=None, figsize=(7, 4)):
+    """Dirty (original) amplitude spectrum with CLEAN components overlaid as
+    stems -- same panel layout as `plot_amplitude_spectrum`."""
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(freqs, dirty_amp, "-", color="0.6", lw=0.7, label="dirty spectrum")
+    if components:
+        cf = [c["frequency"] for c in components]
+        ca = [c["amplitude"] for c in components]
+        ax.stem(cf, ca, linefmt="C3-", markerfmt="C3.", basefmt=" ")
+        ax.plot([], [], "C3-", label="CLEAN components")  # legend entry for the stems
+    ax.set_xlabel("Frequency, 1/d")
+    ax.set_ylabel(f"Amplitude, {units}")
+    if title:
+        ax.set_title(title)
+    ax.legend(fontsize=7)
     fig.tight_layout()
     if out_path:
         fig.savefig(out_path, dpi=150)
