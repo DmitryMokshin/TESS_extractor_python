@@ -38,8 +38,20 @@ def quality_mask(quality, quality_bitmask=175):
 def auto_clean_light_curve(df_lc, quality_bitmask=175, star_bkg_ratio_min=None,
                             local_noise_kappa=2.5, local_noise_window=0.25):
     """
-    Apply ROADMAP.md Этап 5's three rules, in order, each computed on the
-    survivors of the previous one:
+    Apply a data-validity check, then ROADMAP.md Этап 5's three rules, in
+    order, each computed on the survivors of the previous one:
+
+      0. `FLUX` must be finite and positive (`INVALID_FLUX`). Not one of
+         ROADMAP's three named rules, but a prerequisite for them: a run of
+         exactly-zero or non-finite `FLUX` (a real TESScut data defect, e.g.
+         SS 397 S80 has ~127 such frames around BTJD 3491.09-3491.19) has
+         essentially ZERO point-to-point scatter internally -- rule 3 looks
+         for local NOISE, not a flat dropout, so such a run passes it
+         untouched and then wrecks the global noise statistics anything
+         downstream computes (`prewhitening.prewhiten`'s red-noise model
+         included). Always on (unlike rules 2/3, there's no legitimate
+         reason to keep a non-finite/non-positive flux point in a "clean"
+         curve).
       1. `QUALITY` bitmask (`quality_mask`).
       2. `STAR_BKG_RATIO` < `star_bkg_ratio_min` -- aperture-mode only;
          skipped if the column is absent, or if `star_bkg_ratio_min` is None
@@ -52,10 +64,10 @@ def auto_clean_light_curve(df_lc, quality_bitmask=175, star_bkg_ratio_min=None,
 
     Returns `(df_clean, log_df)`: `df_clean` is `df_lc` restricted to the
     surviving rows (index reset); `log_df` has one row per DROPPED row,
-    columns `FRAME, BTJD, REASON` ("QUALITY"/"STAR_BKG_RATIO"/"LOCAL_NOISE"),
-    sorted by `FRAME` -- same format as `lightcurve_tools.windows_to_log`, so
-    a manual-window log can be concatenated with this one into a single
-    combined cleaning log.
+    columns `FRAME, BTJD, REASON` ("INVALID_FLUX"/"QUALITY"/"STAR_BKG_RATIO"/
+    "LOCAL_NOISE"), sorted by `FRAME` -- same format as
+    `lightcurve_tools.windows_to_log`, so a manual-window log can be
+    concatenated with this one into a single combined cleaning log.
     """
     time_col = "BTJD" if "BTJD" in df_lc.columns else "MJD"
     n = len(df_lc)
@@ -65,7 +77,19 @@ def auto_clean_light_curve(df_lc, quality_bitmask=175, star_bkg_ratio_min=None,
     keep = np.ones(n, dtype=bool)
     reason = np.full(n, "", dtype=object)
 
-    q_ok = quality_mask(df_lc["QUALITY"].to_numpy(), quality_bitmask)
+    flux_ok = np.isfinite(df_lc["FLUX"].to_numpy()) & (df_lc["FLUX"].to_numpy() > 0)
+    reason[keep & ~flux_ok] = "INVALID_FLUX"
+    keep &= flux_ok
+
+    # `quality_bitmask=0` means the check is disabled (e.g. a caller already
+    # applied QUALITY filtering upstream and only wants rules 2/3 here) --
+    # skip reading the column at all then, so a QUALITY-less DataFrame
+    # (built from an already-filtered cube, e.g. `ss397_localize.py`'s
+    # per-star curves) doesn't need a dummy column just to pass through.
+    if quality_bitmask or quality_bitmask is None:
+        q_ok = quality_mask(df_lc["QUALITY"].to_numpy(), quality_bitmask)
+    else:
+        q_ok = np.ones(n, dtype=bool)
     reason[keep & ~q_ok] = "QUALITY"
     keep &= q_ok
 

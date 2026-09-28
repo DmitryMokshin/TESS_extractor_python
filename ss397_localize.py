@@ -17,16 +17,23 @@
     кадр описывается суммой PRF звезд Gaia (положения фиксированы) + плоский фон.
     Потоки звезд линейны, решение точное и быстрое (один lstsq на все кадры сразу).
     На выходе отдельные кривые SS 397 и соседа (CSV в формате пайплайна).
- 3. Карты амплитуд: в каждом пикселе подгоняются синусоиды на частотах FREQS
-    (+ квадратичный тренд). Комплексная карта амплитуды раскладывается по PRF звезд:
-    видно, какая звезда несет каждую частоту. (Это все еще живет здесь, а не в
-    пакете -- обобщенная версия для произвольной звезды/звезд сравнения --
-    отдельный, более поздний этап ROADMAP.md, "Этап 6. Проверка происхождения
-    сигнала".)
+ 3. Проверка происхождения сигнала (isolated.localize, ROADMAP.md Этап 6): свежим
+    выбеливанием находятся значимые частоты цели, автоматически выбираются до
+    N_COMPARISON звезд сопоставимого блеска в вырезке (не только в окне цели),
+    им строятся кривые тем же PRF-методом -- и для каждой проверяется, есть ли
+    у неё частоты цели (S/N на заданной частоте). Если да у нескольких звезд
+    сразу -- вероятна общая систематика (рассеянный свет/инструмент), а не
+    сигнал именно цели.
+ 4. Карты амплитуд (isolated.localize): в каждом пикселе подгоняются синусоиды
+    на частотах FREQS (+ квадратичный тренд). Комплексная карта амплитуды
+    раскладывается по PRF звезд: видно, какая звезда несет каждую частоту.
 
 Выход: out_localize/
     amp_maps.pdf              — карты амплитуд с положениями звезд
     attribution.txt           — доли амплитуды по звездам для каждой частоты
+    comparison_stars.csv      — таблица происхождения сигнала (звезда x частота
+                                 цели: амплитуда, S/N, есть ли частота)
+    comparison_stars.txt      — то же, сводной таблицей для чтения глазами
     lc_deblended_<id>.csv     — PRF-кривые (BTJD, FRAME, FLUX) для SS 397 и соседа
     lc_deblended.pdf          — сравнение кривых
 и в stars_python/SS_397/50x50/:
@@ -51,6 +58,9 @@ from isolated.geometry import get_nospace_star_name, calc_tess_magnitude
 from isolated.lightcurve_tools import local_point_to_point_sigma
 from isolated.cleaning import quality_mask, auto_clean_light_curve, save_cleaning_log, summarize_cleaning_log
 from isolated.prf_photometry import select_prf_model_stars, build_prf_star_cuts, deblend_prf_flux
+from isolated.localize import amplitude_maps, attribute_amplitude, select_comparison_stars, \
+    deblend_star_curve, signal_origin_table
+from isolated.prewhitening import prewhiten
 from run_config import CONFIG
 
 # =============================================================================
@@ -68,6 +78,9 @@ TARGET_ID = 4155000844481174656
 # частоты для карт (из анализа clean-кривой), 1/сут
 FREQS = [1.5810, 1.6333, 1.5182, 1.6593, 1.7412, 0.1295, 0.0895, 0.1972]
 OUTDIR = "out_localize"
+# звезды сравнения (ROADMAP.md Этап 6): сколько брать и насколько близко по T-величине
+N_COMPARISON = 5
+COMPARISON_MAG_TOL = 1.0
 # Какие флаги QUALITY выбрасывают кадр. 175 = стандартная маска lightkurve "default":
 # 1 AttitudeTweak, 2 SafeMode, 4 CoarsePoint, 8 EarthPoint, 32 Desat, 128 ManualExclude.
 # Флаги рассеянного света (2048, 4096 и т.п.) НЕ выбрасываем: такие кадры часто
@@ -77,32 +90,6 @@ QUALITY_BITMASK = CONFIG.quality_bitmask
 LOCAL_NOISE_KAPPA = CONFIG.local_noise_kappa  # отбраковка "_prf_clean": локальный шум > KAPPA × медиана
 RUN_TESS_AFTER = True     # сразу прогнать ss397_tess.analyse по разделенным кривым
 SHOW_PLOTS = True         # открыть окна с рисунками в конце (PDF сохраняются всегда)
-
-
-# =============================================================================
-# карты амплитуд / разложение по звездам (Этап 6 ROADMAP.md -- пока только здесь)
-# =============================================================================
-def amplitude_maps(t, cube_box, freqs):
-    """Комплексная амплитуда каждой частоты в каждом пикселе (e/s): A = a_cos + i a_sin."""
-    tt = t - t.mean()
-    cols = [np.ones_like(tt), tt, tt ** 2]
-    for f in freqs:
-        cols += [np.cos(2 * np.pi * f * t), np.sin(2 * np.pi * f * t)]
-    X = np.array(cols).T
-    D = np.nan_to_num(cube_box.reshape(cube_box.shape[0], -1))
-    coef, *_ = np.linalg.lstsq(X, D, rcond=None)
-    c = coef[3:].reshape(len(freqs), 2, *cube_box.shape[1:])
-    return c[:, 0] + 1j * c[:, 1]                 # (nfreq, box, box)
-
-
-def attribute(amap, models):
-    """Разложение комплексной карты амплитуды по PRF звезд (+ константа).
-    Возвращает |c_j| (e/s) — амплитуду, которую несет каждая звезда."""
-    X = np.c_[models.reshape(models.shape[0], -1).T, np.ones(models[0].size)]
-    y = amap.ravel()
-    cr, *_ = np.linalg.lstsq(X, y.real, rcond=None)
-    ci, *_ = np.linalg.lstsq(X, y.imag, rcond=None)
-    return np.abs(cr[:-1] + 1j * ci[:-1])
 
 
 def export_clean_lc(t, flux, dat_path, csv_path=None, star="SS 397", sector=80, note="", frame_no=None):
@@ -212,6 +199,68 @@ def main():
                           star=STAR_NAME, sector=SECTOR, frame_no=frame_no)
     print(f"Кривая для коллег: {dat}")
 
+    # =========================================================================
+    # звезды сравнения: сигнал свой у цели или общий для поля/инструмента?
+    # (ROADMAP.md Этап 6, "Проверка происхождения сигнала")
+    # =========================================================================
+    # свежие значимые частоты цели -- не захардкоженный FREQS (тот подобран
+    # вручную для карт ниже и не обязан совпадать со свежим набором после Этапа 5)
+    t0 = t  # already BTJD = BJD-2457000 (see export_clean_lc's own header above), not full BJD
+    y_target_ppt = (fluxes[:, it] / np.median(fluxes[:, it]) - 1.0) * 1e3
+    target_peaks, target_extra = prewhiten(t0, y_target_ppt, fmax=CONFIG.prewhiten_fmax,
+                                            nmax=CONFIG.n_max_freq, snr_stop=CONFIG.snr_stop)
+    T_target = target_extra["T"]
+    target_freqs = [p["frequency"] for p in target_peaks if p["frequency"] > 2.0 / T_target]
+    print(f"\nЗначимые частоты цели (S/N >= {CONFIG.snr_stop}, не тренд): "
+          + ", ".join(f"{f:.4f}" for f in target_freqs))
+
+    comparison_stars = select_comparison_stars(gaia, TARGET_ID, CUT, CUT, n=N_COMPARISON,
+                                                mag_tol=COMPARISON_MAG_TOL, box=BOX)
+    print(f"\nЗвезды сравнения ({len(comparison_stars)}, |dT| <= {COMPARISON_MAG_TOL}):")
+    print(comparison_stars[["source_id", "t_mag", "px_x", "px_y"]].to_string())
+
+    # тот же good (правило 1, QUALITY), что и у цели -- "тем же методом"
+    cube_good = cube[good]
+    t_quality = t_all[good]
+    frame_quality = frame_no_all[good]
+
+    star_curves = [("target(SS397)", t0, y_target_ppt)]
+    if target_freqs and len(comparison_stars):
+        for _, cstar in comparison_stars.iterrows():
+            label = f"src{int(cstar['source_id']) % 100000}(T={cstar['t_mag']:.1f})"
+            try:
+                c_flux, _c_stars, _c_models, _c_bkg = deblend_star_curve(
+                    cube_good, prf, gaia, CUT, CUT, int(cstar["source_id"]), box=BOX, dt_max=DT_MAX,
+                    merge_px=MERGE_PX)
+            except ValueError as exc:
+                print(f"Пропускаю {label}: {exc}")
+                continue
+            df_c = pd.DataFrame({"BTJD": t_quality, "FRAME": frame_quality, "FLUX": c_flux})
+            # правило 3 автоочистки (локальный шум) -- своя чистка на кадр для каждой звезды,
+            # правило 1 (QUALITY) уже применено выше через cube_good/t_quality
+            df_c_clean, _log_c = auto_clean_light_curve(df_c, quality_bitmask=0, local_noise_kappa=LOCAL_NOISE_KAPPA)
+            if len(df_c_clean) < 50:  # too few surviving points for a meaningful noise estimate
+                print(f"Пропускаю {label}: после очистки осталось только {len(df_c_clean)} кадров "
+                      f"(вероятно, плохо смоделированная/слабая звезда в этом окне)")
+                continue
+            t_c = df_c_clean["BTJD"].to_numpy()  # already BTJD, not full BJD (see t0 above)
+            flux_c = df_c_clean["FLUX"].to_numpy()
+            y_c_ppt = (flux_c / np.median(flux_c) - 1.0) * 1e3
+            star_curves.append((label, t_c, y_c_ppt))
+
+        origin_table = signal_origin_table(star_curves, target_freqs, fmax=CONFIG.prewhiten_fmax,
+                                            snr_threshold=CONFIG.snr_stop)
+        origin_table.to_csv(os.path.join(OUTDIR, "comparison_stars.csv"), index=False)
+        pivot = origin_table.pivot(index="LABEL", columns="FREQUENCY", values="SNR_LOCAL").round(1)
+        summary = (f"S/N_local по частотам цели (порог значимости S/N >= {CONFIG.snr_stop}; "
+                   f"да/нет -- колонка PRESENT в comparison_stars.csv):\n{pivot.to_string()}")
+        with open(os.path.join(OUTDIR, "comparison_stars.txt"), "w") as fo:
+            fo.write(summary + "\n")
+        print(f"\nПроверка происхождения сигнала:\n{summary}")
+        print(f"Таблица звезд сравнения: {os.path.join(OUTDIR, 'comparison_stars.csv')}")
+    else:
+        print("\nНет значимых частот цели или звезд сравнения -- таблица происхождения сигнала пропущена")
+
     # --- карты амплитуд и разложение по звездам ---
     # вычитаем подогнанный плоский фон (иначе медленные вариации рассеянного света
     # ложатся на все пиксели и мешают на низких частотах). bkg уже посчитан выше
@@ -229,7 +278,7 @@ def main():
              "   | SS397/(SS397+сосед) | A_SS397 / F_SS397, ppt"]
     medF = np.median(fluxes, axis=0)
     for k, f in enumerate(FREQS):
-        c = attribute(amaps[k], models)
+        c = attribute_amplitude(amaps[k], models)
         share = c[it] / (c[it] + c[iN]) if iN is not None else c[it] / c.sum()
         lines.append(f"{f:8.4f}   " + "  ".join(f"{v:12.2f}" for v in c) +
                      f"   | {share:18.2f}  | {1e3 * c[it] / medF[it]:8.2f}")
