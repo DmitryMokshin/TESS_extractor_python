@@ -22,6 +22,13 @@ class RunConfig:
     # --- звезда / сектор / вырезка ---
     star_name: str = "SS 397"
     sector: int = 80
+    # несколько секторов (ROADMAP.md Этап 7): если задано (>=2 значений),
+    # Peridogram_compute.py анализирует объединенный (склеенный) ряд вместо
+    # одного `sector`; каждый сектор из списка должен уже иметь свою
+    # `_clean`/`_prf_clean` кривую (обычный прогон TESS_cleaning.py/
+    # ss397_localize.py на каждый сектор по отдельности). По умолчанию не
+    # задано -- поведение всех скриптов не меняется, как и раньше один `sector`.
+    sectors: Optional[tuple[int, ...]] = None
     cut_width: int = 50
     cut_height: int = 50
     # "prf" -- ss397_localize.py-стиль PRF-деблендинг (isolated.prf_photometry),

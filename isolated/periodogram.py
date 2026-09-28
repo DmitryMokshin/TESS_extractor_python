@@ -61,6 +61,27 @@ def suggest_period_range(mjd, nyquist_factor=2.0, max_period_fraction=1.0):
     return nyquist_factor * sampling, max_period_fraction * baseline
 
 
+def compute_ls_periodogram_from_series(t, y, period_range=(0.08, 10.0), samples_per_peak=10):
+    """
+    Lomb-Scargle periodogram of an already-prepared (t, y) series -- no
+    cleaning/detrending here, unlike `compute_ls_periodogram` (which calls
+    this internally after its own DataFrame-based cleaning step). For a
+    series that was already cleaned/detrended elsewhere, e.g. per-sector by
+    `multisector.stitch_light_curves` before stitching several sectors
+    together (ROADMAP.md Этап 7) -- `cleaned_jds_mags`'s single-file
+    box-smooth cleaning doesn't apply to an already-combined multi-sector
+    series.
+
+    Returns (freq, power, ls) -- see `compute_ls_periodogram`.
+    """
+    ls = LombScargle(t, y)
+    min_freq = 1.0 / period_range[1]
+    max_freq = 1.0 / period_range[0]
+    freq, power = ls.autopower(minimum_frequency=min_freq, maximum_frequency=max_freq,
+                                samples_per_peak=samples_per_peak)
+    return freq, power, ls
+
+
 def compute_ls_periodogram(df_lc, jd_box=0.1, sigma_tol=10, n_out=20,
                             period_range=(0.08, 10.0), samples_per_peak=10, detrend_deg=0):
     """
@@ -83,12 +104,7 @@ def compute_ls_periodogram(df_lc, jd_box=0.1, sigma_tol=10, n_out=20,
         x = cleaned_jds - cleaned_jds.mean()
         y = y - np.polyval(np.polyfit(x, y, detrend_deg), x)
 
-    ls = LombScargle(cleaned_jds, y)
-    min_freq = 1.0 / period_range[1]
-    max_freq = 1.0 / period_range[0]
-    freq, power = ls.autopower(minimum_frequency=min_freq, maximum_frequency=max_freq,
-                                samples_per_peak=samples_per_peak)
-    return freq, power, ls
+    return compute_ls_periodogram_from_series(cleaned_jds, y, period_range, samples_per_peak)
 
 
 def find_periodogram_peaks(freq, power, ls, fap_levels=(0.1, 0.01, 0.001), max_peaks=10, fap_method="naive"):
