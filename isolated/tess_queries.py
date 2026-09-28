@@ -25,8 +25,8 @@ full investigation. `get_tess_cutouts`'s `sector` parameter is the fix.
 """
 from __future__ import annotations
 
-import io
 import os
+import re
 import zipfile
 
 import requests
@@ -62,19 +62,18 @@ def get_tess_cutouts(star_ra: float, star_dec: float, width: int, height: int,
                       star_name: str = "star", product: str = "SPOC",
                       star_directory: str = STAR_DIRECTORY, sector: int | None = None) -> str:
     """
-    Download a TESScut zip archive for the given position/size and save it
-    to the same directory layout the rest of the package expects (one zip
-    per star/cutout-size, containing one FITS file per sector). Returns the
-    path to the (created or already-cached) zip file.
+    Download TESScut FITS cutouts for the given position/size and save each
+    sector as its own loose FITS file, `{star}-sector{N:04d}-cutout.fits`, in
+    the same directory layout the rest of the package expects (ROADMAP.md
+    Этап 9: "каждый сектор отдельным FITS, чтение с memmap, а не весь zip в
+    память" -- replaces the previous single-zip-per-star archive). Returns
+    the directory the files were written to.
 
     `sector`: if given, ask TESScut for just this one sector instead of
     every sector the star was ever observed in -- much faster, and avoids
     the "Timeout limit of 600 exceeded" failure mode documented in
     `tesscut_timeout_notes.dat` (request size grows with cutout area x
-    frames-per-sector x number-of-sectors). Repeated calls with different
-    `sector` values for the same star/size append to the same cached zip
-    instead of overwriting it, so the file ends up the same as a single
-    `sector=None` call would have produced. Default (`sector=None`) is the
+    frames-per-sector x number-of-sectors). Default (`sector=None`) is the
     original "fetch every sector at once" behaviour -- unchanged.
 
     Tries `astroquery.mast.Tesscut` first (recommended, robust); falls back
@@ -84,12 +83,11 @@ def get_tess_cutouts(star_ra: float, star_dec: float, width: int, height: int,
     nospace_star_name = get_nospace_star_name(star_name)
     out_dir = os.path.join(star_directory, nospace_star_name, f"{width}x{height}")
     os.makedirs(out_dir, exist_ok=True)
-    cutouts_file = os.path.join(out_dir, f"{nospace_star_name}.zip")
 
     try:
-        _get_tess_cutouts_astroquery(star_ra, star_dec, width, height, cutouts_file, sector=sector)
+        _get_tess_cutouts_astroquery(star_ra, star_dec, width, height, out_dir, nospace_star_name, sector=sector)
     except ImportError:
-        _get_tess_cutouts_raw(star_ra, star_dec, width, height, cutouts_file)
+        _get_tess_cutouts_raw(star_ra, star_dec, width, height, out_dir, nospace_star_name)
     except Exception as e:
         from astroquery.exceptions import TimeoutError as AstroqueryTimeoutError
         if isinstance(e, AstroqueryTimeoutError):
@@ -123,10 +121,14 @@ def get_tess_cutouts(star_ra: float, star_dec: float, width: int, height: int,
             "  4. Retry -- MAST's cutout service does occasionally have transient outages."
         ) from e
 
-    return cutouts_file
+    return out_dir
 
 
-def _get_tess_cutouts_astroquery(star_ra, star_dec, width, height, cutouts_file, sector=None):
+def _sector_fits_path(out_dir, nospace_star_name, sector):
+    return os.path.join(out_dir, f"{nospace_star_name}-sector{sector:04d}-cutout.fits")
+
+
+def _get_tess_cutouts_astroquery(star_ra, star_dec, width, height, out_dir, nospace_star_name, sector=None):
     from astropy.coordinates import SkyCoord
     import astropy.units as u
     from astroquery.mast import Tesscut
@@ -146,21 +148,19 @@ def _get_tess_cutouts_astroquery(star_ra, star_dec, width, height, cutouts_file,
     if not hdulists:
         raise RuntimeError(f"MAST TESScut returned no cutouts for ra={star_ra}, dec={star_dec}, {sector_desc}")
 
-    zip_mode = "a" if os.path.isfile(cutouts_file) else "w"
-    with zipfile.ZipFile(cutouts_file, zip_mode) as archive:
-        already_cached = set(archive.namelist()) if zip_mode == "a" else set()
-        for i, hdul in enumerate(hdulists):
-            cutout_sector = hdul[0].header.get("SECTOR", i)
-            entry_name = f"tess-sector{cutout_sector:04d}-cutout.fits"
-            if entry_name in already_cached:
-                continue
-            buf = io.BytesIO()
-            hdul.writeto(buf)
-            archive.writestr(entry_name, buf.getvalue())
+    for i, hdul in enumerate(hdulists):
+        cutout_sector = hdul[0].header.get("SECTOR", i)
+        hdul.writeto(_sector_fits_path(out_dir, nospace_star_name, cutout_sector), overwrite=True)
 
 
-def _get_tess_cutouts_raw(star_ra, star_dec, width, height, cutouts_file):
-    """Fallback used only if astroquery is not installed."""
+def _get_tess_cutouts_raw(star_ra, star_dec, width, height, out_dir, nospace_star_name):
+    """
+    Fallback used only if astroquery is not installed. The raw MAST endpoint
+    always returns a zip archive (not under our control), so this downloads
+    to a temporary zip and immediately extracts each sector into the same
+    loose-FITS layout `_get_tess_cutouts_astroquery` produces, then removes
+    the temporary zip.
+    """
     session = _session_with_retries()
     url = "https://mast.stsci.edu/tesscut/api/v0.1/astrocut"
     params = {"ra": star_ra, "dec": star_dec, "y": height, "x": width}
@@ -168,8 +168,20 @@ def _get_tess_cutouts_raw(star_ra, star_dec, width, height, cutouts_file):
     resp = session.get(url, params=params, allow_redirects=True, stream=True, timeout=120)
     resp.raise_for_status()
     total = int(resp.headers.get("content-length", 0))
-    with open(cutouts_file, "wb") as f, tqdm(total=total or None, unit="B", unit_scale=True,
-                                              desc="Downloading TESS cutouts") as bar:
+    tmp_zip = os.path.join(out_dir, f".{nospace_star_name}-download.zip.tmp")
+    with open(tmp_zip, "wb") as f, tqdm(total=total or None, unit="B", unit_scale=True,
+                                          desc="Downloading TESS cutouts") as bar:
         for chunk in resp.iter_content(chunk_size=1 << 16):
             f.write(chunk)
             bar.update(len(chunk))
+    try:
+        with zipfile.ZipFile(tmp_zip) as archive:
+            for name in archive.namelist():
+                match = re.match(r"tess-sector(\d+)-cutout\.fits$", name)
+                if not match:
+                    continue
+                dest = _sector_fits_path(out_dir, nospace_star_name, int(match.group(1)))
+                with archive.open(name) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+    finally:
+        os.remove(tmp_zip)

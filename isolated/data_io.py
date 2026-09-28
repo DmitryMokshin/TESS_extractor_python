@@ -114,7 +114,13 @@ def _star_zip_path(star_name, star_directory=STAR_DIRECTORY, cut_width=None, cut
 
 
 def extract_tess_cutouts(star_name="star", star_directory=STAR_DIRECTORY):
-    """Direct port of `extract_tess_cutouts`."""
+    """
+    Direct port of `extract_tess_cutouts`. Not called anywhere else in this
+    package (kept for completeness of the port). Reads the pre-Этап-9 zip
+    cache -- won't see sectors downloaded after ROADMAP.md Этап 9 switched
+    to one loose FITS file per sector (see `load_tess_cutouts`); not updated
+    since nothing here depends on it.
+    """
     zip_path = _star_zip_path(star_name, star_directory)
     if not os.path.isfile(zip_path):
         raise ErrorNoTESScut(star_name)
@@ -127,7 +133,10 @@ def extract_tess_cutouts(star_name="star", star_directory=STAR_DIRECTORY):
 
 
 def get_tess_sectors_from_file(star_name, star_directory=STAR_DIRECTORY):
-    """Direct port of the file-based `get_tess_sectors(star_name; query=false)` method."""
+    """
+    Direct port of the file-based `get_tess_sectors(star_name; query=false)`
+    method. Same pre-Этап-9 zip-only caveat as `extract_tess_cutouts`.
+    """
     zip_path = _star_zip_path(star_name, star_directory)
     if not os.path.isfile(zip_path):
         raise ErrorNoTESScut(star_name)
@@ -141,7 +150,10 @@ def get_tess_sectors_from_file(star_name, star_directory=STAR_DIRECTORY):
 
 
 def get_star_tesscut_fits(star_name, sector, star_directory=STAR_DIRECTORY):
-    """Direct port of `get_star_tesscut_fits`."""
+    """
+    Direct port of `get_star_tesscut_fits`. Same pre-Этап-9 zip-only caveat
+    as `extract_tess_cutouts`.
+    """
     zip_path = _star_zip_path(star_name, star_directory)
     if not os.path.isfile(zip_path):
         raise ErrorNoTESScut(star_name)
@@ -168,17 +180,59 @@ def load_star_gaia_data(star_name, star_directory=STAR_DIRECTORY) -> pd.Series:
     return _read_gaia_csv(gaia_data_file).iloc[0]
 
 
+def _sector_fits_path(cutouts_dir, nospace, sector):
+    return os.path.join(cutouts_dir, f"{nospace}-sector{sector:04d}-cutout.fits")
+
+
+def _cached_sector_numbers(cutouts_dir, nospace):
+    """Which sectors already have a loose per-sector FITS file (ROADMAP.md Этап 9)."""
+    if not os.path.isdir(cutouts_dir):
+        return set()
+    pattern = re.compile(rf"{re.escape(nospace)}-sector(\d+)-cutout\.fits$")
+    return {int(m.group(1)) for name in os.listdir(cutouts_dir) if (m := pattern.match(name))}
+
+
+def _extract_sector_from_legacy_zip(zip_path, cutouts_dir, nospace, sector):
+    """
+    Pull just one sector's FITS entry out of the pre-Этап-9 zip cache into
+    the new loose-file layout, entirely locally (no network) -- lets an
+    already-downloaded star (e.g. SS 397) keep working without redownloading
+    from MAST. Doesn't touch or delete the zip. Returns True if the sector
+    was found (and extracted) in it, False otherwise.
+    """
+    entry_name = f"tess-sector{sector:04d}-cutout.fits"
+    with zipfile.ZipFile(zip_path) as archive:
+        if entry_name not in archive.namelist():
+            return False
+        os.makedirs(cutouts_dir, exist_ok=True)
+        with archive.open(entry_name) as src, open(_sector_fits_path(cutouts_dir, nospace, sector), "wb") as dst:
+            dst.write(src.read())
+    return True
+
+
 def load_tess_cutouts(star_name, cut_width, cut_height=None, star_directory=STAR_DIRECTORY, sector=None):
     """
-    Direct port of `load_tess_cutouts`. Returns a dict {sector_int: fits.HDUList}.
+    Port of `load_tess_cutouts`. Returns a dict {sector_int: fits.HDUList}.
 
-    `sector`: if given and not already present in the cached zip, downloads
+    Each sector is its own loose FITS file on disk (ROADMAP.md Этап 9:
+    "каждый сектор отдельным FITS, чтение с memmap, а не весь zip в память"
+    -- was one zip archive per star, holding every sector, always read fully
+    into memory regardless of how many sectors the caller actually wanted;
+    every real caller only ever uses one). Opened with `memmap=True`, so the
+    file's pixel data is paged in from disk on access instead of loaded
+    upfront -- meaningful for a 50x50 cutout's ~1.1 GB full-sector archive.
+
+    A pre-Этап-9 cached `.zip` for this star (if present) is read from
+    locally -- no redownload -- the first time each of its sectors is needed;
+    the zip itself is left untouched.
+
+    `sector`: if given, only that sector is ensured cached/opened (download
     just that one sector instead of every sector the star was ever observed
-    in (see `tess_queries.get_tess_cutouts`'s `sector` parameter) -- much
+    in -- see `tess_queries.get_tess_cutouts`'s `sector` parameter -- much
     faster, and avoids astroquery's "Timeout limit of 600 exceeded" on a
-    large cutout or many sectors (see tesscut_timeout_notes.dat). Default
+    large cutout or many sectors, see tesscut_timeout_notes.dat). Default
     (`sector=None`) is the original behaviour, unchanged: on a fresh cache,
-    fetch every sector at once.
+    fetch every sector at once, and return all of them.
     """
     if cut_height is None:
         cut_height = cut_width
@@ -191,31 +245,36 @@ def load_tess_cutouts(star_name, cut_width, cut_height=None, star_directory=STAR
     ra, dec = float(gaia_data["ra"]), float(gaia_data["dec"])
 
     cutouts_dir = os.path.join(out_dir, f"{cut_width}x{cut_height}")
-    cutouts_file = os.path.join(cutouts_dir, f"{nospace}.zip")
+    legacy_zip = os.path.join(cutouts_dir, f"{nospace}.zip")
 
-    need_download = not os.path.isfile(cutouts_file)
-    if not need_download and sector is not None:
-        with zipfile.ZipFile(cutouts_file) as archive:
-            cached_sectors = set()
+    def ensure_sector(s):
+        if s in _cached_sector_numbers(cutouts_dir, nospace):
+            return
+        if os.path.isfile(legacy_zip) and _extract_sector_from_legacy_zip(legacy_zip, cutouts_dir, nospace, s):
+            return
+        os.makedirs(cutouts_dir, exist_ok=True)
+        _download_tess_cutouts(ra, dec, cut_width, cut_height, star_name=star_name,
+                                star_directory=star_directory, sector=s)
+
+    if sector is not None:
+        ensure_sector(sector)
+        return {sector: pyfits.open(_sector_fits_path(cutouts_dir, nospace, sector), memmap=True)}
+
+    if os.path.isfile(legacy_zip):
+        with zipfile.ZipFile(legacy_zip) as archive:
             for name in archive.namelist():
                 match = re.match(r"tess-sector(\d+)-cutout\.fits$", name)
                 if match:
-                    cached_sectors.add(int(match.group(1)))
-        need_download = sector not in cached_sectors
+                    ensure_sector(int(match.group(1)))
 
-    if need_download:
+    cached_sectors = _cached_sector_numbers(cutouts_dir, nospace)
+    if not cached_sectors:
         os.makedirs(cutouts_dir, exist_ok=True)
         _download_tess_cutouts(ra, dec, cut_width, cut_height, star_name=star_name,
-                                star_directory=star_directory, sector=sector)
+                                star_directory=star_directory, sector=None)
+        cached_sectors = _cached_sector_numbers(cutouts_dir, nospace)
 
-    result = {}
-    with zipfile.ZipFile(cutouts_file) as archive:
-        for name in archive.namelist():
-            with archive.open(name) as f:
-                hdul = pyfits.open(io.BytesIO(f.read()))
-                sector = int(hdul[0].header["SECTOR"])
-                result[sector] = hdul
-    return result
+    return {s: pyfits.open(_sector_fits_path(cutouts_dir, nospace, s), memmap=True) for s in cached_sectors}
 
 
 def load_gaia_stars_in_view_data(star_name, cut_fits, d_mag_r=5.0, rewrite_file=False,
@@ -257,14 +316,16 @@ def load_gaia_stars_in_view_data(star_name, cut_fits, d_mag_r=5.0, rewrite_file=
         adql = (f"select * from gaiadr3.gaia_source where DISTANCE(POINT('ICRS', {center[0]}, {center[1]}), "
                 f"POINT('ICRS', ra, dec)) < {distance * 1.2} and phot_rp_mean_mag < {mag_cutoff} "
                 f"order by phot_rp_mean_mag asc")
-        data = _run_query(_gaia_tap(), adql, desc=f"Querying Gaia for stars near {star_name} (sector {sector})")
-        if len(data) >= 2000:
-            import warnings
-            warnings.warn(
-                f"Gaia query for '{star_name}' sector {sector} returned {len(data)} rows -- this "
-                f"looks like it hit the TAP service's sync-job row cap (results are then an "
-                f"incomplete, order-dependent subset of the true field). Consider lowering d_mag_r."
-            )
+        # async_query=True (ROADMAP.md Этап 9): this query has no `TOP` and can
+        # legitimately return tens of thousands of rows for a dense field -- a
+        # sync job silently truncates at exactly 2000 (verified live: the same
+        # query returned 2000 rows over sync, 35812 over async for a dense
+        # field). Async's own row cap is far higher (millions, for an anonymous
+        # Gaia TAP+ user) -- not a realistic risk for this query, so no more
+        # "did this silently truncate at 2000" warning here (a real ~2000+
+        # row result, like SS 397's own ~2600, is no longer a sign of trouble).
+        data = _run_query(_gaia_tap(), adql, desc=f"Querying Gaia for stars near {star_name} (sector {sector})",
+                          async_query=True)
 
         # The cone-search query above has, in practice, occasionally come back
         # without the target star itself even though it's well within the
