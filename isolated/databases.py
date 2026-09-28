@@ -39,7 +39,7 @@ def _gaia() -> TapPlus:
     return _gaia_tap
 
 
-def _run_query(tap: TapPlus, adql: str, desc: str = "Querying TAP service") -> pd.DataFrame:
+def _run_query(tap: TapPlus, adql: str, desc: str = "Querying TAP service", async_query: bool = False) -> pd.DataFrame:
     """
     Direct analogue of `convert_vo_to_df(execute(TAPService(...), adql))`.
 
@@ -48,9 +48,20 @@ def _run_query(tap: TapPlus, adql: str, desc: str = "Querying TAP service") -> p
     columns in lowercase) -- everywhere else in this package assumes
     lowercase column names (matching the Julia code, whose TAP client
     normalized this for you), so we normalize here, once, for every query.
+
+    `async_query` (ROADMAP.md Этап 9): the Gaia TAP service caps a SYNC job
+    (`launch_job`, the default here) at exactly 2000 rows for a query with no
+    explicit `TOP` -- verified live (a real cone-search query that should
+    return ~36000 rows came back truncated to 2000 over sync, complete over
+    async). An ASYNC job (`launch_job_async`) has no such cap, at the cost of
+    being slower (polls for completion instead of a direct response). Default
+    `False` keeps every existing caller's behaviour/speed unchanged -- none
+    of the small lookup queries (Simbad identification, single-source_id
+    Gaia rows) ever approached the cap; only `data_io.load_gaia_stars_in_view_data`'s
+    field-star query does.
     """
     with heartbeat(desc):
-        job = tap.launch_job(adql)
+        job = tap.launch_job_async(adql) if async_query else tap.launch_job(adql)
         table = job.get_results()
     df = table.to_pandas()
     df.columns = [str(c).lower() for c in df.columns]

@@ -14,7 +14,7 @@ from .tess_point import tess_stars2px_sector, is_in_sector, find_tess_sectors
 from .data_io import (
     load_star_gaia_data, load_tess_cutouts, load_gaia_stars_in_view_data,
     load_light_curve, create_gaia_datafiles, get_star_tesscut_fits,
-    extract_tess_cutouts, get_tess_sectors_from_file,
+    extract_tess_cutouts, get_tess_sectors_from_file, read_light_curve_csv,
 )
 from .lightcurve_tools import (
     delete_nans, box_smooth, clean_flux_sigma, clean_flux, find_sampling,
@@ -29,6 +29,11 @@ from .periodogram import (
     fit_multi_sine, fit_periodogram_approximation, plot_periodogram_approximation,
     suggest_period_range,
 )
+from .prewhitening import (
+    amp_spectrum, window_function, prewhiten, multisine_model, format_frequency_table,
+    save_frequency_table, plot_amplitude_spectrum, dynamic_spectrum, plot_dynamic_spectrum,
+    plot_prewhitening_fit,
+)
 from .stray_light import (
     pick_stripe_pixels, stray_light_monitor_curve, plot_stray_light_diagnostics, correct_stray_light,
 )
@@ -40,7 +45,7 @@ __all__ = [
     "tess_stars2px_sector", "is_in_sector", "find_tess_sectors",
     "load_star_gaia_data", "load_tess_cutouts", "load_gaia_stars_in_view_data",
     "load_light_curve", "create_gaia_datafiles", "get_star_tesscut_fits",
-    "extract_tess_cutouts", "get_tess_sectors_from_file",
+    "extract_tess_cutouts", "get_tess_sectors_from_file", "read_light_curve_csv",
     "delete_nans", "box_smooth", "clean_flux_sigma", "clean_flux", "find_sampling",
     "find_acf", "save_lc_figure", "get_all_data",
     "exclude_frame_windows", "pick_exclusion_windows", "save_clean_light_curve", "save_trash_light_curve",
@@ -50,5 +55,8 @@ __all__ = [
     "compute_ls_periodogram", "find_periodogram_peaks", "save_periodogram", "plot_periodogram",
     "fit_multi_sine", "fit_periodogram_approximation", "plot_periodogram_approximation",
     "suggest_period_range",
+    "amp_spectrum", "window_function", "prewhiten", "multisine_model", "format_frequency_table",
+    "save_frequency_table", "plot_amplitude_spectrum", "dynamic_spectrum", "plot_dynamic_spectrum",
+    "plot_prewhitening_fit",
     "pick_stripe_pixels", "stray_light_monitor_curve", "plot_stray_light_diagnostics", "correct_stray_light",
 ]

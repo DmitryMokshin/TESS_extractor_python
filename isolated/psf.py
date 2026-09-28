@@ -20,6 +20,14 @@ from astropy.io import fits as pyfits
 from .geometry import calc_tess_flux_from_mag
 from .tess_point import tess_stars2px_sector
 
+# in-process cache for get_tesscut_prf_supersampled, keyed by (sector, cam,
+# ccd, ccd position, cache dir) -- ROADMAP.md Этап 9 ("кэшировать PRF на
+# сектор и ПЗС"): avoids re-downloading/re-interpolating the same PRF within
+# one process (e.g. a target + several comparison stars in the same cutout,
+# isolated.localize's Этап 6 signal-origin check), without touching the
+# on-disk PRF-file cache (already handled by `os.path.isfile` in `ensure()`).
+_PRF_CACHE: dict = {}
+
 
 # --------------------------------------------------------------------------- #
 # Analytic PSF models (not used by the main PRF-based pipeline, kept for
@@ -110,6 +118,10 @@ def get_tesscut_prf_supersampled(cut_fits, prf_cache_dir="prf", download=True):
     cam = int(cut_fits[0].header["CAMERA"])
     ccd = int(cut_fits[0].header["CCD"])
 
+    cache_key = (sector, cam, ccd, int(ccd_x), int(ccd_y), prf_cache_dir)
+    if cache_key in _PRF_CACHE:
+        return _PRF_CACHE[cache_key]
+
     prf_url = "https://archive.stsci.edu/missions/tess/models/prf_fitsfiles"
     prf_dir = f"start_s000{4 if sector > 3 else 1}/cam{cam}_ccd{ccd}"
 
@@ -164,82 +176,58 @@ def get_tesscut_prf_supersampled(cut_fits, prf_cache_dir="prf", download=True):
                          - (ccd_y - b_row) * (ccd_x - r_col) * tl_prf
                          - (ccd_y - t_row) * (ccd_x - l_col) * br_prf
                          + (ccd_y - t_row) * (ccd_x - r_col) * bl_prf) / (t_row - b_row) / (r_col - l_col)
+    _PRF_CACHE[cache_key] = interpolated_prf
     return interpolated_prf
+
+
+def _prf_axis_weights(n_px, supersampled_len, source, n_super=9, offset=59):
+    """
+    Vectorized form of `get_prf_cut`/`add_prf_cut`'s per-axis weight: for
+    output pixel `x_px` (1-based) the corresponding supersampled-PRF centre
+    is `x_prf_source = (x_px - source)*n_super + offset`, and the weight
+    given to supersampled index `x_prf` (1-based) is a flat-top taper --
+    `1` for `|x_prf - x_prf_source| <= 4`, linearly down to `0` over
+    `(4, 5)`, `0` beyond -- identical to the original nested-loop formula
+    (confirmed separable: the 2D weight there is exactly this function's
+    outer product along x and y). Returns an `(n_px, supersampled_len)`
+    weight matrix; `get_prf_cut`/`add_prf_cut` combine the x/y matrices with
+    two matrix products instead of a Python double loop per output pixel.
+    """
+    px = np.arange(1, n_px + 1, dtype=float)
+    prf_source = (px - source) * n_super + offset
+    prf_idx = np.arange(1, supersampled_len + 1, dtype=float)
+    d = np.abs(prf_idx[None, :] - prf_source[:, None])
+    return np.where(d <= 4, 1.0, np.where(d < 5, 5.0 - d, 0.0))
 
 
 def get_prf_cut(prf_supersampled, cut_width, cut_height, x_source, y_source):
     """
-    Direct (unoptimized, matches the Julia reference implementation) port of
-    `get_prf_cut`: bin the 9x-supersampled PRF onto a cut_width x cut_height
-    pixel grid centered on (x_source, y_source) (1-based pixel coordinates).
+    Vectorized port of `get_prf_cut`: bin the 9x-supersampled PRF onto a
+    cut_width x cut_height pixel grid centered on (x_source, y_source)
+    (1-based pixel coordinates). Same formula as the original nested-loop
+    reference implementation (see `_prf_axis_weights`), just computed as two
+    matrix products instead of a double loop over every output pixel x every
+    supersampled-PRF cell -- ROADMAP.md Этап 9 ("get_prf_cut/add_prf_cut:
+    векторизовать").
     """
-    prf = np.zeros((cut_width, cut_height))
     supersampled_width, supersampled_height = prf_supersampled.shape
-
-    for x_px in range(1, cut_width + 1):
-        for y_px in range(1, cut_height + 1):
-            x_prf_source = (x_px - x_source) * 9 + 59
-            y_prf_source = (y_px - y_source) * 9 + 59
-
-            mask = np.ones((supersampled_width, supersampled_height))
-            for x_prf in range(1, supersampled_width + 1):
-                dx = abs(x_prf - x_prf_source)
-                for y_prf in range(1, supersampled_height + 1):
-                    dy = abs(y_prf - y_prf_source)
-                    if dx >= 5 or dy >= 5:
-                        mask[x_prf - 1, y_prf - 1] = 0.0
-                        continue
-                    if dx <= 4 and dy <= 4:
-                        mask[x_prf - 1, y_prf - 1] = 1.0
-                        continue
-                    m = mask[x_prf - 1, y_prf - 1]
-                    if dx > 4:
-                        m *= 5 - dx
-                    if dy > 4:
-                        m *= 5 - dy
-                    mask[x_prf - 1, y_prf - 1] = m
-
-            val = np.sum(prf_supersampled * mask) / 81
-            prf[x_px - 1, y_px - 1] = val if val >= 2e-4 else 0.0
-    return prf
+    wx = _prf_axis_weights(cut_width, supersampled_width, x_source)
+    wy = _prf_axis_weights(cut_height, supersampled_height, y_source)
+    val = (wx @ prf_supersampled @ wy.T) / 81
+    return np.where(val >= 2e-4, val, 0.0)
 
 
 def add_prf_cut(cut, flux, prf_supersampled, cut_width, cut_height, x_source, y_source):
     """
-    Direct port of `add_prf_cut!`: the windowed/optimized version of
-    get_prf_cut, adding `flux * PRF` into `cut` in-place. Returns `cut`.
+    Vectorized port of `add_prf_cut!`: adds `flux * PRF` into `cut` in-place
+    and returns it. Same weight formula as `get_prf_cut` (see
+    `_prf_axis_weights`), without `get_prf_cut`'s `>= 2e-4` threshold (the
+    original windowed/optimized loop never applied one either).
     """
     supersampled_width, supersampled_height = prf_supersampled.shape
-
-    for x_px in range(1, cut_width + 1):
-        for y_px in range(1, cut_height + 1):
-            x_prf_source = (x_px - x_source) * 9 + 59
-            y_prf_source = (y_px - y_source) * 9 + 59
-            x_prf_source_int = round((x_px - x_source) * 9 + 59)
-            y_prf_source_int = round((y_px - y_source) * 9 + 59)
-
-            x_prf_start = max(1, x_prf_source_int - 6)
-            x_prf_end = min(supersampled_width, x_prf_source_int + 6)
-            y_prf_start = max(1, y_prf_source_int - 6)
-            y_prf_end = min(supersampled_height, y_prf_source_int + 6)
-
-            acc = 0.0
-            for x_prf in range(x_prf_start, x_prf_end + 1):
-                dx = abs(x_prf - x_prf_source)
-                for y_prf in range(y_prf_start, y_prf_end + 1):
-                    dy = abs(y_prf - y_prf_source)
-                    if dx >= 5 or dy >= 5:
-                        continue
-                    mask = 1.0
-                    if dx <= 4 and dy <= 4:
-                        mask = 1.0
-                    else:
-                        if dx > 4:
-                            mask *= 5 - dx
-                        if dy > 4:
-                            mask *= 5 - dy
-                    acc += prf_supersampled[x_prf - 1, y_prf - 1] * mask / 81 * flux
-            cut[x_px - 1, y_px - 1] += acc
+    wx = _prf_axis_weights(cut_width, supersampled_width, x_source)
+    wy = _prf_axis_weights(cut_height, supersampled_height, y_source)
+    cut += flux * (wx @ prf_supersampled @ wy.T) / 81
     return cut
 
 

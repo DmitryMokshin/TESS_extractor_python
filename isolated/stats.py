@@ -16,7 +16,8 @@ from .lightcurve_tools import delete_nans, clean_flux_sigma, box_smooth, find_sa
 def cleaned_jds_mags(df_lc, jd_box=0.1, sigma_tol=10, n_out=20):
     """NaN-dropped, sigma-clipped (jds, mags) pair shared by the stats below
     and by the periodogram module."""
-    jds, mags = delete_nans(get_true_jd(df_lc["MJD"].to_numpy()), df_lc["MAG"].to_numpy())
+    jds, mags = delete_nans(get_true_jd(df_lc["BTJD" if "BTJD" in df_lc.columns else "MJD"].to_numpy()),
+                            df_lc["MAG"].to_numpy())
     mags = mags.copy()
     clean_flux_sigma(jds, mags, jd_box, sigma_tol, n_out)
     return delete_nans(jds, mags)

@@ -29,6 +29,7 @@ from .config import STAR_DIRECTORY
 from .geometry import get_nospace_star_name
 from .stats import cleaned_jds_mags
 from .lightcurve_tools import find_sampling
+from .provenance import provenance_header
 
 
 def suggest_period_range(mjd, nyquist_factor=2.0, max_period_fraction=1.0):
@@ -61,8 +62,29 @@ def suggest_period_range(mjd, nyquist_factor=2.0, max_period_fraction=1.0):
     return nyquist_factor * sampling, max_period_fraction * baseline
 
 
+def compute_ls_periodogram_from_series(t, y, period_range=(0.08, 10.0), samples_per_peak=10):
+    """
+    Lomb-Scargle periodogram of an already-prepared (t, y) series -- no
+    cleaning/detrending here, unlike `compute_ls_periodogram` (which calls
+    this internally after its own DataFrame-based cleaning step). For a
+    series that was already cleaned/detrended elsewhere, e.g. per-sector by
+    `multisector.stitch_light_curves` before stitching several sectors
+    together (ROADMAP.md Этап 7) -- `cleaned_jds_mags`'s single-file
+    box-smooth cleaning doesn't apply to an already-combined multi-sector
+    series.
+
+    Returns (freq, power, ls) -- see `compute_ls_periodogram`.
+    """
+    ls = LombScargle(t, y)
+    min_freq = 1.0 / period_range[1]
+    max_freq = 1.0 / period_range[0]
+    freq, power = ls.autopower(minimum_frequency=min_freq, maximum_frequency=max_freq,
+                                samples_per_peak=samples_per_peak)
+    return freq, power, ls
+
+
 def compute_ls_periodogram(df_lc, jd_box=0.1, sigma_tol=10, n_out=20,
-                            period_range=(0.08, 10.0), samples_per_peak=10):
+                            period_range=(0.08, 10.0), samples_per_peak=10, detrend_deg=0):
     """
     Lomb-Scargle periodogram of a light curve's magnitudes (median-subtracted,
     sigma-clipped the same way as `stats.find_period`).
@@ -71,16 +93,19 @@ def compute_ls_periodogram(df_lc, jd_box=0.1, sigma_tol=10, n_out=20,
     `ls` the astropy `LombScargle` instance (needed for
     false_alarm_probability/false_alarm_level -- see `find_periodogram_peaks`
     and `save_periodogram`).
+
+    `detrend_deg` > 0 subtracts a polynomial of that degree in time first.
+    Without it a slow trend over the sector leaks into the lowest frequencies
+    (the highest "peak" then sits at 1/T or 2/T -- an artefact, not a period).
+    Default 0 keeps the old behaviour.
     """
     cleaned_jds, cleaned_mags = cleaned_jds_mags(df_lc, jd_box, sigma_tol, n_out)
     y = cleaned_mags - np.median(cleaned_mags)
+    if detrend_deg > 0:
+        x = cleaned_jds - cleaned_jds.mean()
+        y = y - np.polyval(np.polyfit(x, y, detrend_deg), x)
 
-    ls = LombScargle(cleaned_jds, y)
-    min_freq = 1.0 / period_range[1]
-    max_freq = 1.0 / period_range[0]
-    freq, power = ls.autopower(minimum_frequency=min_freq, maximum_frequency=max_freq,
-                                samples_per_peak=samples_per_peak)
-    return freq, power, ls
+    return compute_ls_periodogram_from_series(cleaned_jds, y, period_range, samples_per_peak)
 
 
 def find_periodogram_peaks(freq, power, ls, fap_levels=(0.1, 0.01, 0.001), max_peaks=10, fap_method="naive"):
@@ -129,6 +154,8 @@ def save_periodogram(star_name, sector, freq, power, ls, cut_width, cut_height=N
 
     levels = ls.false_alarm_level(fap_levels, method=fap_method)
     header_lines = [
+        *provenance_header(n_points=len(freq), star_name=star_name, sector=sector, fap_method=fap_method),
+        "",
         "Lomb-Scargle periodogram",
         f"star: {star_name}, sector: {sector}",
         f"FAP method: {fap_method}",

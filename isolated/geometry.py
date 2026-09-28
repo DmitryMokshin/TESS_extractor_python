@@ -89,3 +89,18 @@ def calc_tess_flux_from_mag(mag):
 def get_true_jd(mjd):
     """Direct port of `get_true_jd`: mjd + 2457000"""
     return mjd + 2457000
+
+
+def calc_tmag_from_gaia(g_mag, bp_rp):
+    """
+    TESS magnitude from Gaia G and BP-RP, per Stassun et al. (2019, TIC-8).
+    Not a Julia port -- new for the PRF-deblending star selection in
+    `isolated.prf_photometry` (which needs a magnitude estimate for *every*
+    field star, not just the target, to rank/threshold them by brightness).
+    The rest of the pipeline (aperture background mask, aperture-flux
+    correction) intentionally keeps using Gaia RP as a stand-in for T, as it
+    always has -- see CLAUDE.md's note on not silently changing numbers
+    that already went into published results.
+    """
+    bp_rp = np.nan_to_num(np.asarray(bp_rp, dtype=float), nan=1.0)
+    return g_mag - 0.00522555 * bp_rp ** 3 + 0.0891337 * bp_rp ** 2 - 0.633923 * bp_rp + 0.0324473

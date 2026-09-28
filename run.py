@@ -13,10 +13,11 @@ from isolated.tess_point import find_tess_sectors
 from isolated.config import TESS_MAX_SECTORS
 from isolated.viewer import plot_cuts, save_cutout_video
 from isolated.lightcurve_tools import save_lc_figure
+from run_config import CONFIG
 
-STAR_NAME = "EM* AS 14"
-CUT_WIDTH = 15
-CUT_HEIGHT = 15
+STAR_NAME = CONFIG.star_name
+CUT_WIDTH = CONFIG.cut_width
+CUT_HEIGHT = CONFIG.cut_height
 
 
 def print_stage(title, **settings):
@@ -95,7 +96,8 @@ def main():
     # 2. Узнать, в каких секторах TESS наблюдал эту точку неба -- и выбрать нужный с клавиатуры
     sectors = find_tess_sectors(float(gaia["ra"]), float(gaia["dec"]), TESS_MAX_SECTORS)
     print("Доступные секторы:", sectors)
-    sector = ask_int("Какой сектор скачать и обработать", default=sectors[0], choices=sectors)
+    default_sector = CONFIG.sector if CONFIG.sector in sectors else sectors[0]
+    sector = ask_int("Какой сектор скачать и обработать", default=default_sector, choices=sectors)
 
     print_stage("Шаг 3: загрузка/кэширование кривой блеска",
                 звезда=STAR_NAME, сектор=sector, размер_кадра=f"{CUT_WIDTH}x{CUT_HEIGHT}")
