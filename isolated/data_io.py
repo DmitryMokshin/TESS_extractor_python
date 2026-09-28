@@ -347,7 +347,7 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
     from .psf import get_tesscut_prf_supersampled
     from .photometry import (find_background_prf_gaia_mags, calc_aperture_prf_correction,
                               calc_aperture_photometry_with_diagnostics, calc_aperture_flux_error,
-                              calc_prf_contamination_fraction)
+                              calc_prf_contamination_fraction, precompute_aperture_mask)
     from .geometry import calc_tess_flux_from_mag
 
     if cut_height is None:
@@ -408,6 +408,10 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
                   f"(sector {sector}, r={aperture_radius}px) -- a crowded field; consider PRF-deblending "
                   f"photometry (isolated.prf_photometry) instead of aperture photometry for this star.")
 
+        # precomputed once (ROADMAP.md Этап 9): star_px/aperture_radius don't change
+        # across frames, so the "exact" aperture weights don't need rebuilding per frame
+        aperture_mask = precompute_aperture_mask(star_px[0], star_px[1], aperture_radius)
+
         phot_flux = np.zeros(n_cuts)
         sn = np.zeros(n_cuts)
         flux_bkg = np.zeros(n_cuts)
@@ -416,8 +420,10 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
         flux_err = np.zeros(n_cuts)
         for i in tqdm(range(n_cuts), desc=f"{star_name} sector {sector}: photometry", unit="frame"):
             phot_flux[i], sn[i], flux_bkg[i], centroid_x[i], centroid_y[i] = calc_aperture_photometry_with_diagnostics(
-                frame(i), frame_bkg(i), bkg_pixels, star_px[0], star_px[1], aperture_radius)
-            flux_err[i] = calc_aperture_flux_error(frame_err(i), star_px[0], star_px[1], aperture_radius)
+                frame(i), frame_bkg(i), bkg_pixels, star_px[0], star_px[1], aperture_radius,
+                aperture_mask=aperture_mask)
+            flux_err[i] = calc_aperture_flux_error(frame_err(i), star_px[0], star_px[1], aperture_radius,
+                                                    aperture_mask=aperture_mask)
         phot_flux *= aperture_correction
         flux_err *= aperture_correction
 
