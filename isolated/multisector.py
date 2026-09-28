@@ -9,7 +9,7 @@ don't leak into the lowest frequencies once combined. See ROADMAP.md,
 
 Downloading/photometering/cleaning stays entirely per-sector and unchanged
 (`data_io.load_tess_cutouts`'s `sector=` already supports fetching one
-sector at a time into the same cache; `TESS_cleaning.py`/`ss397_localize.py`
+sector at a time into the same cache; `TESS_cleaning.py`/`PRF_cleaning.py`
 already produce one `_clean`/`_prf_clean` CSV per sector) -- this module
 only combines the already-cleaned per-sector outputs.
 """

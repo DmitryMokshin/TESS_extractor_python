@@ -179,7 +179,7 @@ def periodogram_compute_analise_multisector(star_name_process, sector_numbers, c
     zero-point/drift between sectors and the (often year-scale) gap between
     them don't leak into the lowest frequencies. Each sector's own
     `light_curve_sector_{N}{lc_suffix}.csv` must already exist (run
-    `TESS_cleaning.py`/`ss397_localize.py` once per sector beforehand, same
+    `TESS_cleaning.py`/`PRF_cleaning.py` once per sector beforehand, same
     as for a single sector -- unchanged).
     """
     star_dir = f"stars_python/{star_name_process}/{cadr_width_for_analyse}x{cadr_height_for_analyse}"
@@ -207,7 +207,7 @@ def periodogram_compute_analise_multisector(star_name_process, sector_numbers, c
 
 if __name__ == "__main__":
     # Звезда / сектор(ы) / размер кадра / режим фотометрии -- из run_config.py (Этап 4),
-    # тот же конфиг, что и run.py/TESS_cleaning.py/ss397_localize.py/ss397_tess.py.
+    # тот же конфиг, что и run.py/TESS_cleaning.py/PRF_cleaning.py/Peridogram_diagnostics.py.
     # CONFIG.sectors (Этап 7) -- если задан (больше одного сектора), анализ идет по
     # объединенному ряду; иначе (по умолчанию) -- как раньше, один CONFIG.sector.
     from run_config import CONFIG

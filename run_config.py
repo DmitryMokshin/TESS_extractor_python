@@ -2,8 +2,8 @@
 Единая точка настройки пайплайна: звезда, сектор, размер вырезки, режим
 фотометрии и параметры чистки/частотного анализа. Смена звезды/сектора --
 одна правка здесь; `run.py`, `TESS_cleaning.py`, `Peridogram_compute.py`,
-`ss397_localize.py`, `ss397_tess.py` читают этот файл вместо собственных
-констант. ROADMAP.md, "Этап 4. Один конфиг".
+`PRF_cleaning.py`, `Peridogram_diagnostics.py` читают этот файл вместо собственных
+констант.
 
 Не сюда: то, что специфично для одного скрипта/конкретного исследования,
 а не для пайплайна в целом (id звезды сравнения, частоты для карт
@@ -26,12 +26,12 @@ class RunConfig:
     # Peridogram_compute.py анализирует объединенный (склеенный) ряд вместо
     # одного `sector`; каждый сектор из списка должен уже иметь свою
     # `_clean`/`_prf_clean` кривую (обычный прогон TESS_cleaning.py/
-    # ss397_localize.py на каждый сектор по отдельности). По умолчанию не
+    # PRF_cleaning.py на каждый сектор по отдельности). По умолчанию не
     # задано -- поведение всех скриптов не меняется, как и раньше один `sector`.
     sectors: Optional[tuple[int, ...]] = None
     cut_width: int = 50
     cut_height: int = 50
-    # "prf" -- ss397_localize.py-стиль PRF-деблендинг (isolated.prf_photometry),
+    # "prf" -- PRF_cleaning.py-стиль PRF-деблендинг (isolated.prf_photometry),
     # "aperture" -- TESS_cleaning.py-стиль апертурная фотометрия (load_light_curve)
     photometry_mode: str = "prf"
 
@@ -50,10 +50,10 @@ class RunConfig:
     prf_merge_px: float = 1.0
 
     # --- отбраковка кадров ---
-    quality_bitmask: int = 175  # см. isolated.prf_photometry/ss397_localize.py
+    quality_bitmask: int = 175  # см. isolated.prf_photometry/PRF_cleaning.py
     local_noise_kappa: float = 2.5  # см. isolated.lightcurve_tools.local_point_to_point_sigma
 
-    # --- частотный анализ (Peridogram_compute.py / ss397_tess.py) ---
+    # --- частотный анализ (Peridogram_compute.py / Peridogram_diagnostics.py) ---
     nyquist_factor: float = 2.0
     max_period_fraction: float = 0.5
     detrend_deg: int = 2

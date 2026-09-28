@@ -1,24 +1,35 @@
 """
-SS 397, TESS сектор 80: анализ под замечания рецензента к разделу 5.
+`Peridogram_compute.py`'s частотный анализ, но подробнее (ROADMAP.md Этап 8):
 
-  п.1  инструментальные участки (≈3491, ≈3504): объективный критерий отбраковки
-       по локальному шуму точка-к-точке + типичная ошибка потока;
-  п.2  ошибки частот (Montgomery & O'Donoghue 1999 с поправкой на корреляцию
-       остатков, Schwarzenberg-Czerny 1991) и значимость: S/N >= 4 относительно
-       локального шума (Breger et al. 1993) и относительно модели красного шума;
-  п.3  та же процедура для звезд сравнения: analyse(<csv>) — для любой кривой;
-  п.4  динамический амплитудный спектр (скользящее окно) для группы 1.5–1.65 1/сут
-       + амплитуды в ppt/mmag для обсуждения "что может дать такую амплитуду".
+  - объективный критерий отбраковки инструментальных участков по локальному
+    шуму точка-к-точке (а не "на глаз") + типичная ошибка потока;
+  - ошибки частот бутстрепом по остаткам и по двум половинам ряда — проверка
+    формул Montgomery & O'Donoghue (1999) с поправкой на корреляцию остатков
+    (Schwarzenberg-Czerny 1991); значимость — S/N >= 4 относительно локального
+    шума (Breger et al. 1993) и модели красного шума (Bowman et al. 2019);
+  - та же процедура для любой другой кривой: `analyse(<csv>)`;
+  - комбинационные частоты с допуском по ошибкам частот, а не просто 0.5/T;
+  - опция CLEAN (Roberts et al. 1987) для сравнения с программами коллег;
+  - динамический амплитудный спектр (скользящее окно) для заданного диапазона
+    частот + трекинг самого сильного пика в нём, амплитуды в ppt/mmag;
+  - опционально: отметка окна внешних (например, наземных спектроскопических)
+    наблюдений на кривой и её фрагмент вокруг этого окна;
+  - опционально: отметка частот для сравнения на рисунках (из другой
+    публикации/каталога по этой же звезде, `COMPARISON_FREQS`).
 
 Входной формат: CSV со столбцами MJD (на деле BTJD = BJD-2457000), FLUX, [SN].
+`run_all()` по умолчанию прогоняет `analyse()` по `RUNS`, собранному из
+`run_config.py`: текущий режим фотометрии, альтернативный режим (если
+посчитан) и деблендированная кривая соседа (`PRF_cleaning.py`, если
+считался) — три прогона подряд, результаты сравнимы напрямую.
 
 Запуск из PyCharm: поправь блок НАСТРОЙКИ ниже и нажми Run (зеленый треугольник).
 Файл должен лежать в корне проекта TESS_extractor_python (рядом с run.py).
 
 Числовая часть (спектр амплитуд, выбеливание, ошибки, модель красного шума)
-теперь живет в isolated/prewhitening.py и просто вызывается отсюда — раньше
-была продублирована почти дословно в этом файле (и одна из копий незаметно
-разошлась с другой в параметризации red_noise_fit). Здесь остались только
+живёт в isolated/prewhitening.py и просто вызывается отсюда — раньше была
+продублирована почти дословно в этом файле (и одна из копий незаметно
+расходилась с другой в параметризации red_noise_fit). Здесь остались только
 загрузка/отбраковка кадров, отчеты, графики и настройки запуска.
 """
 import os
@@ -41,7 +52,7 @@ STAR_DIR = CONFIG.star_dir
 # какие кривые анализировать: (путь к CSV, метка для имен файлов).
 # Отсутствующие файлы пропускаются с сообщением. Первая запись -- текущий
 # режим по run_config.py; вторая -- сравнение с другим режимом фотометрии;
-# третья -- кривая яркого соседа (ss397_localize.py) для сравнения по частотам.
+# третья -- кривая яркого соседа (PRF_cleaning.py) для сравнения по частотам.
 RUNS = [
     (f"{STAR_DIR}/light_curve_sector_{CONFIG.sector}{CONFIG.lc_suffix}.csv", "primary"),
     (f"{STAR_DIR}/light_curve_sector_{CONFIG.sector}"
@@ -54,14 +65,21 @@ FMAX = CONFIG.prewhiten_fmax   # верхняя частота поиска, 1/�
 N_MAX = CONFIG.n_max_freq      # максимум частот при выбеливании
 DYN_WINDOW = CONFIG.dyn_window  # окно динамического спектра, сут
 KAPPA = CONFIG.local_noise_kappa  # отбраковка: локальный шум > KAPPA × медиана
-# время наблюдений на БТА (UT); None — не рисовать
-BTA_UT = None        # например ("2024-06-24T19:30", "2024-06-24T22:30")
+# диапазон частот для "зум"-панели амплитудного спектра, динамического спектра
+# и трекинга её самого сильного пика (1/сут) -- сузьте под свою группу частот
+DYN_FRANGE = CONFIG.dyn_frange
+DYN_FREQ_STEP = 0.005   # шаг сетки частот динамического спектра, 1/сут
+# окно внешних (напр. наземных спектроскопических) наблюдений (UT); None -- не рисовать
+GROUND_OBS_UT = None        # например ("2024-06-24T19:30", "2024-06-24T22:30")
+# частоты для сравнения на рисунках (напр. из другой публикации/каталога по
+# этой же звезде); пусто -- не рисовать
+COMPARISON_FREQS = []
 SHOW_PLOTS = True    # открыть окна с рисунками в конце (PDF сохраняются всегда)
 
 # --- частотный анализ, дальше (ROADMAP.md Этап 8) -- специфично для этого
-# исследования (как FREQS/NEIGHBOUR_ID в ss397_localize.py), не в run_config.py.
+# шага (как COMPARISON_FREQS/GROUND_OBS_UT выше), не в run_config.py.
 # По умолчанию в analyse() всё это выключено (не меняет скорость/поведение,
-# пока явно не включено) -- здесь включено, чтобы реально проверить на SS 397.
+# пока явно не включено) -- здесь включено, чтобы реально проверять.
 N_SIGMA_COMBINATION = 3.0    # допуск комбинационных частот, x sigma_f вместо 0.5/T
 DO_BOOTSTRAP = True          # ошибки частот бутстрепом + по двум половинам ряда
 N_BOOT = 200
@@ -74,9 +92,6 @@ CLEAN_NITER = 150
 
 # =============================================================================
 PPT2MMAG = 2.5 / np.log(10)   # 1 ppt ≈ 1.086 mmag
-
-# частоты из табл. 2 статьи (для сравнения на рисунках)
-PAPER_FREQS = [0.068, 0.132, 0.189, 1.516, 1.580, 1.625]
 
 
 # =============================================================================
@@ -119,8 +134,9 @@ def segments(t, mask):
 # =============================================================================
 # основной анализ
 # =============================================================================
-def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.0,
-            bta_ut=None, kappa=2.5, n_sigma_combination=3.0,
+def analyse(path, tag="target", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.0,
+            dyn_frange=(0.5, 5.0), dyn_freq_step=0.005, comparison_freqs=(),
+            ground_obs_ut=None, kappa=2.5, n_sigma_combination=3.0,
             do_bootstrap=False, n_boot=200,
             do_stability=False, stability_window=10.0, stability_step=1.0,
             do_clean=False, clean_gain=0.2, clean_niter=150):
@@ -230,12 +246,12 @@ def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.
     for a, b, n in segments(t, good):
         for axx in ax:
             axx.axvspan(a, b, color="C3", alpha=0.12, lw=0)
-    if bta_ut:
+    if ground_obs_ut:
         from astropy.time import Time
-        b1, b2 = [Time(s, scale="utc").jd - 2457000 for s in bta_ut]
+        g1, g2 = [Time(s, scale="utc").jd - 2457000 for s in ground_obs_ut]
         for axx in ax:
-            axx.axvspan(b1, b2, color="C0", alpha=0.3, lw=0)
-        ax[0].text(b1, ax[0].get_ylim()[1], " БТА", color="C0", va="top")
+            axx.axvspan(g1, g2, color="C0", alpha=0.3, lw=0)
+        ax[0].text(g1, ax[0].get_ylim()[1], " внеш. набл.", color="C0", va="top")
     ax[0].set_ylabel("ΔF, ppt"); ax[0].legend(fontsize=8, markerscale=6)
     ax[1].set_ylabel("шум, ppt"); ax[1].set_xlabel("BJD − 2457000")
     ax[1].set_yscale("log")
@@ -251,29 +267,30 @@ def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.
     for x in R["fr"]:
         ax[0].axvline(x, color="C0", lw=0.5, alpha=0.6)
     ax[0].set_xlim(0, fmax); ax[0].set_ylabel("A, ppt"); ax[0].legend(fontsize=8)
-    z = (fg > 1.2) & (fg < 2.0)
-    ax[1].plot(fg[z], A0[z], "k-", lw=1, label="SS 397")
-    main = R["fr"][(R["fr"] > 1.2) & (R["fr"] < 2)]
+    z = (fg > dyn_frange[0]) & (fg < dyn_frange[1])
+    ax[1].plot(fg[z], A0[z], "k-", lw=1, label=tag)
+    main = R["fr"][(R["fr"] > dyn_frange[0]) & (R["fr"] < dyn_frange[1])]
     if main.size:
-        f0 = main[np.argmax(R["am"][(R["fr"] > 1.2) & (R["fr"] < 2)])]
+        f0 = main[np.argmax(R["am"][(R["fr"] > dyn_frange[0]) & (R["fr"] < dyn_frange[1])])]
         W = window_function(R["t"], fg[z], f0)
         ax[1].plot(fg[z], W / W.max() * A0[z].max(), "-", color="C2", lw=0.8,
                    label=f"спектральное окно на {f0:.3f}")
-    for x in PAPER_FREQS:
-        if 1.2 < x < 2.0:
+    for x in comparison_freqs:
+        if dyn_frange[0] < x < dyn_frange[1]:
             ax[1].axvline(x, color="C1", ls=":", lw=1)
     for x in main:
         ax[1].axvline(x, color="C0", lw=0.8)
     ax[1].set_xlabel("Частота, 1/сут"); ax[1].set_ylabel("A, ppt")
     ax[1].legend(fontsize=8)
-    ax[1].text(0.01, 0.95, "синие — найденные здесь, оранжевые — табл. 2 статьи",
-               transform=ax[1].transAxes, fontsize=7, va="top")
+    if len(comparison_freqs):
+        ax[1].text(0.01, 0.95, "синие — найденные здесь, оранжевые — переданные для сравнения (COMPARISON_FREQS)",
+                   transform=ax[1].transAxes, fontsize=7, va="top")
     fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_amplitude_spectrum.pdf"))
 
     # 3) динамический амплитудный спектр
     tt, yy = R["t"], R["y"]
     centers = np.arange(tt.min() + dyn_win / 2, tt.max() - dyn_win / 2 + 1e-6, 0.25)
-    fd = np.arange(0.8, 2.5, 0.005)
+    fd = np.arange(dyn_frange[0], dyn_frange[1], dyn_freq_step)
     dyn = np.full((centers.size, fd.size), np.nan)
     track = []
     for i, c in enumerate(centers):
@@ -282,49 +299,51 @@ def analyse(path, tag="ss397", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10.
             continue
         yy_w = yy[m] - np.polyval(np.polyfit(tt[m] - c, yy[m], 2), tt[m] - c)  # убираем медленный тренд
         dyn[i] = amp_spectrum(tt[m], yy_w, fd)
-        g = (fd > 1.3) & (fd < 1.9)
-        k = np.argmax(dyn[i][g])
-        track.append((c, fd[g][k], dyn[i][g][k]))
+        k = np.argmax(dyn[i])
+        track.append((c, fd[k], dyn[i][k]))
     track = np.array(track)
     fig, ax = plt.subplots(1, 2, figsize=(12, 4.5), gridspec_kw=dict(width_ratios=[3, 1]))
     im = ax[0].pcolormesh(fd, centers, dyn, shading="auto", cmap="viridis")
-    for x in PAPER_FREQS[3:]:
-        ax[0].axvline(x, color="w", ls=":", lw=0.8)
+    for x in comparison_freqs:
+        if dyn_frange[0] < x < dyn_frange[1]:
+            ax[0].axvline(x, color="w", ls=":", lw=0.8)
     ax[0].set_xlabel("Частота, 1/сут"); ax[0].set_ylabel(f"центр окна ({dyn_win:.0f} сут), BJD−2457000")
     plt.colorbar(im, ax=ax[0], label="A, ppt")
     if track.size:
         ax[1].plot(track[:, 2], track[:, 0], "k.-")
-        ax[1].set_xlabel("A пика в 1.3–1.9, ppt")
+        ax[1].set_xlabel(f"A пика в {dyn_frange[0]:.2f}–{dyn_frange[1]:.2f}, ppt")
         ax2 = ax[1].twiny()
         ax2.plot(track[:, 1], track[:, 0], "C3.", ms=3)
         ax2.set_xlabel("ν пика", color="C3")
     fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_dynamic_spectrum.pdf"))
     if track.size:
         P(f"\nДинамический спектр (окно {dyn_win} сут, разрешение ~{1 / dyn_win:.2f} 1/сут — "
-          f"три частоты группы в одном окне НЕ разделяются):")
-        P(f"   частота главного пика в 1.3–1.9: {track[:, 1].min():.3f}–{track[:, 1].max():.3f} "
-          f"(медиана {np.median(track[:, 1]):.3f}); амплитуда {track[:, 2].min():.1f}–{track[:, 2].max():.1f} ppt")
+          f"близкие частоты в одном окне НЕ разделяются):")
+        P(f"   частота главного пика в {dyn_frange[0]:.2f}–{dyn_frange[1]:.2f}: "
+          f"{track[:, 1].min():.3f}–{track[:, 1].max():.3f} (медиана {np.median(track[:, 1]):.3f}); "
+          f"амплитуда {track[:, 2].min():.1f}–{track[:, 2].max():.1f} ppt")
 
-    # 4) фрагмент вокруг ночи БТА
-    if bta_ut:
+    # 4) фрагмент вокруг окна внешних наблюдений
+    if ground_obs_ut:
         fig, ax = plt.subplots(figsize=(10, 3.5))
-        s = (t > b1 - 1.0) & (t < b2 + 1.0)
+        s = (t > g1 - 1.0) & (t < g2 + 1.0)
         ax.plot(t[s & good], y[s & good], ".", ms=2, color="k")
         ax.plot(t[s & ~good], y[s & ~good], ".", ms=2, color="C3")
-        ax.axvspan(b1, b2, color="C0", alpha=0.3)
+        ax.axvspan(g1, g2, color="C0", alpha=0.3)
         ax.set_xlabel("BJD − 2457000"); ax.set_ylabel("ΔF, ppt")
-        ax.set_title("TESS вокруг ночи наблюдений на БТА")
-        fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_bta_night.pdf"))
-        sb = (t >= b1) & (t <= b2)
-        P(f"\nНочь БТА {bta_ut[0]} – {bta_ut[1]} UT = BTJD {b1:.3f}–{b2:.3f}: точек TESS {sb.sum()}, "
-          f"из них хороших {np.sum(sb & good)}; локальный шум {np.median(sig[sb]) if sb.any() else np.nan:.1f} ppt")
+        ax.set_title("TESS вокруг окна внешних наблюдений")
+        fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_ground_obs.pdf"))
+        sb = (t >= g1) & (t <= g2)
+        P(f"\nВнешние наблюдения {ground_obs_ut[0]} – {ground_obs_ut[1]} UT = BTJD {g1:.3f}–{g2:.3f}: "
+          f"точек TESS {sb.sum()}, из них хороших {np.sum(sb & good)}; "
+          f"локальный шум {np.median(sig[sb]) if sb.any() else np.nan:.1f} ppt")
 
     txt = "\n".join(rep)
     print(txt)
     with open(os.path.join(outdir, f"{tag}_report.txt"), "w") as fo:
         fo.write(txt + "\n")
 
-    # LaTeX-таблица для статьи (набор strict)
+    # LaTeX-фрагмент таблицы частот (набор strict), готовый для вставки в текст
     fr, sf, am, sa, sl, sr = results["strict"]["table"]
     with open(os.path.join(outdir, f"{tag}_freqs.tex"), "w") as fo:
         fo.write("% nu [1/d] & P [d] & A [ppt] & S/N_loc & S/N_red\n")
@@ -343,7 +362,9 @@ def run_all(runs=None, show=SHOW_PLOTS):
             print(f"[пропуск] нет файла {path}")
             continue
         print("\n" + "=" * 70 + f"\n{tag}: {path}\n" + "=" * 70)
-        analyse(path, tag, OUTDIR, FMAX, nmax=N_MAX, dyn_win=DYN_WINDOW, bta_ut=BTA_UT, kappa=KAPPA,
+        analyse(path, tag, OUTDIR, FMAX, nmax=N_MAX, dyn_win=DYN_WINDOW,
+               dyn_frange=DYN_FRANGE, dyn_freq_step=DYN_FREQ_STEP, comparison_freqs=COMPARISON_FREQS,
+               ground_obs_ut=GROUND_OBS_UT, kappa=KAPPA,
                n_sigma_combination=N_SIGMA_COMBINATION,
                do_bootstrap=DO_BOOTSTRAP, n_boot=N_BOOT,
                do_stability=DO_STABILITY, stability_window=STABILITY_WINDOW, stability_step=STABILITY_STEP,

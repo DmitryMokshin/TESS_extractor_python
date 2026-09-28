@@ -315,22 +315,15 @@ def get_n_min_mean_background_from_cube(cube_slice, n_min):  # convenience alias
     return get_n_min_mean_background(cube_slice, n_min)
 
 
-def calc_prf_contamination_fraction(star_px_x, star_px_y, stars_x, stars_y, stars_flux,
-                                     supersampled_prf, cut_size, aperture_radius):
+def _prf_aperture_fluxes(star_px_x, star_px_y, stars_x, stars_y, stars_flux,
+                          supersampled_prf, cut_size, aperture_radius):
     """
-    Fraction of the aperture's PRF-modeled flux that belongs to the target
-    star at (star_px_x, star_px_y), against every field star's own PRF
-    footprint landing in the same aperture. Low values (ROADMAP.md warns
-    below 0.8) mean the aperture is mostly collecting a neighbour's light,
-    not the target's own -- the motivation for PRF-deblending photometry
-    (see `isolated.prf_photometry`) in crowded fields.
-
-    Not a Julia port. `stars_x`/`stars_y`/`stars_flux` is the same field-star
-    list used by `find_background_prf_gaia_mags`/`create_gaia_prf_model`
-    (include the target itself); `stars_flux` is each star's TESS flux, e.g.
-    from `calc_tess_flux_from_mag`, in the same order as `stars_x`/`stars_y`.
-    The target is identified as whichever entry is closest to
-    (star_px_x, star_px_y), same matching style as `find_target_row`.
+    Shared by `calc_prf_contamination_fraction`/`find_dominant_contaminant`:
+    each field star's own PRF-modeled flux landing inside the aperture at
+    (star_px_x, star_px_y), plus which entry is the target itself (closest
+    to that position, same matching style as `find_target_row`). See
+    `calc_prf_contamination_fraction`'s docstring for the star-list
+    convention. Returns `(aperture_fluxes, target_idx)`.
     """
     from .psf import add_prf_cut
 
@@ -351,5 +344,55 @@ def calc_prf_contamination_fraction(star_px_x, star_px_y, stars_x, stars_y, star
         add_prf_cut(star_cut, flux, supersampled_prf, cut_size, cut_size, x, y)
         aperture_fluxes[i] = aperture_sum(star_cut, star_px_x, star_px_y, aperture_radius, mask=aperture_mask)
     target_idx = int(np.argmin(np.hypot(stars_x - star_px_x, stars_y - star_px_y)))
+    return aperture_fluxes, target_idx
+
+
+def calc_prf_contamination_fraction(star_px_x, star_px_y, stars_x, stars_y, stars_flux,
+                                     supersampled_prf, cut_size, aperture_radius):
+    """
+    Fraction of the aperture's PRF-modeled flux that belongs to the target
+    star at (star_px_x, star_px_y), against every field star's own PRF
+    footprint landing in the same aperture. Low values (ROADMAP.md warns
+    below 0.8) mean the aperture is mostly collecting a neighbour's light,
+    not the target's own -- the motivation for PRF-deblending photometry
+    (see `isolated.prf_photometry`) in crowded fields.
+
+    Not a Julia port. `stars_x`/`stars_y`/`stars_flux` is the same field-star
+    list used by `find_background_prf_gaia_mags`/`create_gaia_prf_model`
+    (include the target itself); `stars_flux` is each star's TESS flux, e.g.
+    from `calc_tess_flux_from_mag`, in the same order as `stars_x`/`stars_y`.
+    The target is identified as whichever entry is closest to
+    (star_px_x, star_px_y), same matching style as `find_target_row`.
+    """
+    aperture_fluxes, target_idx = _prf_aperture_fluxes(
+        star_px_x, star_px_y, stars_x, stars_y, stars_flux, supersampled_prf, cut_size, aperture_radius)
     total = aperture_fluxes.sum()
     return float(aperture_fluxes[target_idx] / total) if total else float("nan")
+
+
+def find_dominant_contaminant(star_px_x, star_px_y, stars_x, stars_y, stars_flux,
+                               supersampled_prf, cut_size, aperture_radius):
+    """
+    Which field star OTHER than the target contributes the most PRF-modeled
+    flux inside the target's aperture -- for automatically labeling "the
+    neighbour" (e.g. `PRF_cleaning.py`'s deblended-neighbour curve/plot)
+    instead of a hand-picked Gaia `source_id`. Shares its computation with
+    `calc_prf_contamination_fraction` (`_prf_aperture_fluxes`) -- same
+    star-list convention and target-matching, see that function's docstring.
+
+    Returns `(index, fraction)`: `index` into `stars_x`/`stars_y`/`stars_flux`
+    of the dominant other star, and its share of the aperture's total
+    PRF-modeled flux (same definition `calc_prf_contamination_fraction` uses
+    for the target's own share -- with exactly one other star in the field,
+    `fraction == 1 - calc_prf_contamination_fraction(...)`). Returns
+    `(None, 0.0)` if the target is the only star supplied, or the aperture's
+    total modeled flux is zero.
+    """
+    aperture_fluxes, target_idx = _prf_aperture_fluxes(
+        star_px_x, star_px_y, stars_x, stars_y, stars_flux, supersampled_prf, cut_size, aperture_radius)
+    total = aperture_fluxes.sum()
+    others = np.delete(np.arange(aperture_fluxes.size), target_idx)
+    if others.size == 0 or not total:
+        return None, 0.0
+    best = int(others[np.argmax(aperture_fluxes[others])])
+    return best, float(aperture_fluxes[best] / total)

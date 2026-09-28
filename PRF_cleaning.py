@@ -1,50 +1,63 @@
 """
-Чей сигнал? Локализация частот TESS по пикселям + PRF-разделение кривых блеска.
+PRF-режим шага 2 пайплайна: чей сигнал? Локализация частот TESS по пикселям
++ PRF-разделение кривых блеска (звезда/сектор/вырезка/режим — из
+`run_config.py`, работает для любой звезды в конфиге).
 
-Зачем. В апертуре r = 3 пикс вокруг SS 397 (T ≈ 10.8) на расстоянии 3.2 пикс (67″)
-сидит звезда Gaia DR3 4154999332652688000 (T ≈ 9.7, в 2.8 раза ярче; красный гигант).
-По модели PRF на SS 397 приходится лишь ~43 % потока в апертуре, на соседа ~46 %.
-Код пайплайна вычитает только плоский фон, поэтому свет соседей остается в кривой.
+Зачем. В тесных полях простая апертура собирает чужой свет: звезда Gaia
+рядом с целью может давать заметную долю потока в апертуре r=3 пикс — код
+пайплайна без PRF-деблендинга вычитает только плоский фон, и свет соседей
+остаётся в кривой (например, для SS 397, сектор 80: на цель приходится лишь
+~43% потока в апертуре, на ближайшего соседа ~46% -- обе звезды сравнимой
+яркости).
 
 Что делает скрипт:
- 1. Берет вырезку сектора и выбирает кадры: QUALITY_BITMASK (стандартная маска
+ 1. Берёт вырезку сектора и выбирает кадры: QUALITY_BITMASK (стандартная маска
     lightkurve, 175). Дальнейшая (окно-по-окну) чистка -- отдельный шаг через
     уже существующие TESS_cleaning.py/pick_exclusion_windows/exclude_frame_windows
-    поверх сохраненного здесь light_curve_sector_{SECTOR}_prf.csv, как и для
-    апертурного режима -- этот скрипт больше не требует заранее посчитанного
+    поверх сохранённого здесь light_curve_sector_{SECTOR}_prf.csv, как и для
+    апертурного режима -- этот скрипт не требует заранее посчитанного
     light_curve_sector_{SECTOR}_clean.csv.
  2. PRF-фотометрия (isolated.prf_photometry): в окне BOX×BOX вокруг звезды каждый
-    кадр описывается суммой PRF звезд Gaia (положения фиксированы) + плоский фон.
-    Потоки звезд линейны, решение точное и быстрое (один lstsq на все кадры сразу).
-    На выходе отдельные кривые SS 397 и соседа (CSV в формате пайплайна).
+    кадр описывается суммой PRF звёзд Gaia (положения фиксированы) + плоский фон.
+    Потоки звёзд линейны, решение точное и быстрое (один lstsq на все кадры сразу).
+    Цель находится автоматически (isolated.data_io.find_target_row, тот же
+    механизм, что isolated.prf_photometry.load_prf_light_curve), доминирующий
+    сосед (наибольшая доля PRF-потока в апертуре цели) -- тоже автоматически
+    (isolated.photometry.find_dominant_contaminant), без ручных Gaia source_id.
+    На выходе отдельные кривые цели и соседа (CSV в формате пайплайна).
  3. Проверка происхождения сигнала (isolated.localize, ROADMAP.md Этап 6): свежим
     выбеливанием находятся значимые частоты цели, автоматически выбираются до
-    N_COMPARISON звезд сопоставимого блеска в вырезке (не только в окне цели),
+    N_COMPARISON звёзд сопоставимого блеска в вырезке (не только в окне цели),
     им строятся кривые тем же PRF-методом -- и для каждой проверяется, есть ли
-    у неё частоты цели (S/N на заданной частоте). Если да у нескольких звезд
+    у неё частоты цели (S/N на заданной частоте). Если да у нескольких звёзд
     сразу -- вероятна общая систематика (рассеянный свет/инструмент), а не
     сигнал именно цели.
  4. Карты амплитуд (isolated.localize): в каждом пикселе подгоняются синусоиды
-    на частотах FREQS (+ квадратичный тренд). Комплексная карта амплитуды
-    раскладывается по PRF звезд: видно, какая звезда несет каждую частоту.
+    на свежих значимых частотах цели (или на AMP_MAP_FREQS_OVERRIDE, если
+    задан вручную) + квадратичный тренд. Комплексная карта амплитуды
+    раскладывается по PRF звёзд: видно, какая звезда несёт каждую частоту.
+
+Как читать вывод (интерпретация для тесных полей) -- см. README.md, разделы
+"Правила интерпретации при тесных полях" и "Как использовать isolated/localize.py
+напрямую".
 
 Выход: out_localize/
-    amp_maps.pdf              — карты амплитуд с положениями звезд
-    attribution.txt           — доли амплитуды по звездам для каждой частоты
+    amp_maps.pdf              — карты амплитуд с положениями звёзд
+    attribution.txt           — доли амплитуды по звёздам для каждой частоты
     comparison_stars.csv      — таблица происхождения сигнала (звезда x частота
                                  цели: амплитуда, S/N, есть ли частота)
     comparison_stars.txt      — то же, сводной таблицей для чтения глазами
-    lc_deblended_<id>.csv     — PRF-кривые (BTJD, FRAME, FLUX) для SS 397 и соседа
+    lc_deblended_<id>.csv     — PRF-кривые (BTJD, FRAME, FLUX) для цели и соседа
     lc_deblended.pdf          — сравнение кривых
-и в stars_python/SS_397/50x50/:
-    light_curve_sector_80_prf.csv        — канонический PRF-выход пайплайна
-                                            (QUALITY-фильтр, без доп. чистки;
-                                            то же самое, что дал бы
-                                            isolated.prf_photometry.load_prf_light_curve)
-    light_curve_sector_80_prf_clean.csv  — тот же, плюс отбраковка шумных участков
-                                            (см. п.1 выше), для быстрого CLEAN/LS
-Если RUN_TESS_AFTER = True, сразу после этого разделенные кривые прогоняются через
-ss397_tess.py (частоты, ошибки, динамический спектр) — результаты в out_tess/.
+и в CONFIG.star_dir (stars_python/{звезда}/{вырезка}/):
+    light_curve_sector_{N}_prf.csv        — канонический PRF-выход пайплайна
+                                             (QUALITY-фильтр, без доп. чистки;
+                                             то же самое, что дал бы
+                                             isolated.prf_photometry.load_prf_light_curve)
+    light_curve_sector_{N}_prf_clean.csv  — тот же, плюс отбраковка шумных участков
+                                             (см. п.1 выше), для быстрого CLEAN/LS
+Если RUN_DIAGNOSTICS_AFTER = True, сразу после этого разделённые кривые прогоняются через
+Peridogram_diagnostics.py (частоты, ошибки, динамический спектр) — результаты в out_tess/.
 """
 import os
 
@@ -52,12 +65,13 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from isolated.data_io import load_tess_cutouts, load_gaia_stars_in_view_data
+from isolated.data_io import load_tess_cutouts, load_gaia_stars_in_view_data, load_star_gaia_data, find_target_row
 from isolated.psf import get_tesscut_prf_supersampled
-from isolated.geometry import get_nospace_star_name, calc_tess_magnitude
+from isolated.geometry import get_nospace_star_name, calc_tess_magnitude, calc_tess_flux_from_mag
 from isolated.lightcurve_tools import local_point_to_point_sigma
 from isolated.cleaning import quality_mask, auto_clean_light_curve, save_cleaning_log, summarize_cleaning_log
 from isolated.prf_photometry import select_prf_model_stars, build_prf_star_cuts, deblend_prf_flux
+from isolated.photometry import find_dominant_contaminant
 from isolated.localize import amplitude_maps, attribute_amplitude, select_comparison_stars, \
     deblend_star_curve, signal_origin_table
 from isolated.prewhitening import prewhiten
@@ -66,7 +80,7 @@ from run_config import CONFIG
 
 # =============================================================================
 # НАСТРОЙКИ — звезда/сектор/вырезка/чистка теперь в run_config.py (Этап 4);
-# то, что осталось здесь, специфично для этого конкретного исследования.
+# то, что осталось здесь, специфично для этого шага пайплайна (не для звезды).
 # =============================================================================
 STAR_NAME = CONFIG.star_name
 SECTOR = CONFIG.sector
@@ -74,10 +88,10 @@ CUT = CONFIG.cut_width
 BOX = CONFIG.prf_box            # размер окна для PRF-фотометрии (нечетный), пикс
 DT_MAX = CONFIG.prf_dt_max       # включать звезды Gaia не слабее T_target + DT_MAX
 MERGE_PX = CONFIG.prf_merge_px   # звезды ближе MERGE_PX к более яркой не фитуются отдельно (вырождение)
-NEIGHBOUR_ID = 4154999332652688000
-TARGET_ID = 4155000844481174656
-# частоты для карт (из анализа clean-кривой), 1/сут
-FREQS = [1.5810, 1.6333, 1.5182, 1.6593, 1.7412, 0.1295, 0.0895, 0.1972]
+# частоты для карт амплитуд: None -- свежие значимые частоты цели (target_freqs,
+# см. ниже); задать вручную (список 1/сут), если нужны конкретные/кандидатные
+# частоты вместо автовыбора (например, чтобы воспроизвести конкретную фигуру)
+AMP_MAP_FREQS_OVERRIDE = None
 OUTDIR = "out_localize"
 # звезды сравнения (ROADMAP.md Этап 6): сколько брать и насколько близко по T-величине
 N_COMPARISON = 5
@@ -89,11 +103,11 @@ COMPARISON_MAG_TOL = 1.0
 # 0 — не использовать флаги вообще; None — брать только QUALITY == 0 (слишком строго для S80).
 QUALITY_BITMASK = CONFIG.quality_bitmask
 LOCAL_NOISE_KAPPA = CONFIG.local_noise_kappa  # отбраковка "_prf_clean": локальный шум > KAPPA × медиана
-RUN_TESS_AFTER = True     # сразу прогнать ss397_tess.analyse по разделенным кривым
+RUN_DIAGNOSTICS_AFTER = True     # сразу прогнать Peridogram_diagnostics.analyse по разделенным кривым
 SHOW_PLOTS = True         # открыть окна с рисунками в конце (PDF сохраняются всегда)
 
 
-def export_clean_lc(t, flux, dat_path, csv_path=None, star="SS 397", sector=80, note="", frame_no=None):
+def export_clean_lc(t, flux, dat_path, star, sector, csv_path=None, note="", frame_no=None):
     """
     Очищенная кривая блеска для коллег (ASCII, для CLEAN/LS в любых программах):
         BJD-2457000   dF/F[ppt]   sigma[ppt]   dmag[mag]   FLUX[e/s]
@@ -137,8 +151,10 @@ def main():
     cube = np.transpose(np.asarray(data["FLUX"], float), (0, 2, 1))   # (nt, x, y), как frame(i)
     prf = get_tesscut_prf_supersampled(cut_fits)
 
+    gaia_data = load_star_gaia_data(STAR_NAME)
     gaia = load_gaia_stars_in_view_data(STAR_NAME, cut_fits, d_mag_r=6.0)
-    tgt = gaia[gaia["source_id"] == TARGET_ID].iloc[0]
+    tgt = find_target_row(gaia, gaia_data, SECTOR)
+    TARGET_ID = int(tgt["source_id"])
     box_x0 = int(round(tgt["px_x"])) - BOX // 2       # 1-based начало окна
     box_y0 = int(round(tgt["px_y"])) - BOX // 2
     stars = select_prf_model_stars(gaia, TARGET_ID, box_x0, box_y0, BOX, DT_MAX, MERGE_PX)
@@ -164,8 +180,30 @@ def main():
     fluxes, bkg = deblend_prf_flux(box, models)
 
     it = int(np.where(stars["source_id"] == TARGET_ID)[0][0])
-    inb = np.where(stars["source_id"] == NEIGHBOUR_ID)[0]
-    iN = int(inb[0]) if inb.size else None
+
+    # доминирующий сосед -- звезда поля с наибольшей долей PRF-потока в апертуре
+    # цели, а не заранее известный Gaia source_id (isolated.photometry, новое
+    # в этой версии скрипта)
+    iN, neighbour_frac = find_dominant_contaminant(
+        tgt["px_x"], tgt["px_y"], stars["px_x"].to_numpy(), stars["px_y"].to_numpy(),
+        calc_tess_flux_from_mag(stars["phot_rp_mean_mag"].to_numpy()), prf, CUT, CONFIG.aperture_radius)
+    if iN is not None:
+        NEIGHBOUR_ID = int(stars.iloc[iN]["source_id"])
+        print(f"\nДоминирующий сосед в апертуре r={CONFIG.aperture_radius}px: source_id={NEIGHBOUR_ID} "
+              f"(T={stars.iloc[iN]['t_mag']:.2f}), доля потока цели+соседа ~{neighbour_frac:.0%}.")
+        if neighbour_frac > 0.2:
+            print("  -> существенное загрязнение (>20%): доверять можно только PRF-кривой цели, "
+                  "апертурная фотометрия здесь искажена соседом. Прежде чем приписывать найденную "
+                  "частоту цели, сверьтесь с comparison_stars.csv (PRESENT) и долей `share` в "
+                  "attribution.txt/amp_maps.pdf -- см. README.md, \"Правила интерпретации при "
+                  "тесных полях\".")
+        elif neighbour_frac > 0.05:
+            print("  -> заметное, но не доминирующее загрязнение (5-20%) -- иметь в виду при "
+                  "сравнении с апертурной фотометрией.")
+    else:
+        NEIGHBOUR_ID = None
+        print("\nСоседей в окне модели не найдено -- поле изолированное, PRF- и апертурный "
+              "режимы должны давать близкие результаты.")
 
     # канонический PRF-выход пайплайна (без доп. чистки) -- то же самое, что дал бы
     # isolated.prf_photometry.load_prf_light_curve; сохраняем сами, чтобы не гонять
@@ -194,7 +232,7 @@ def main():
     log_path = save_cleaning_log(log_combined, STAR_NAME, SECTOR, CUT, suffix="_prf_clean")
     print(f"\nЛог чистки: {log_path}\n{summarize_cleaning_log(log_combined, total_frames=t_all.size)}")
 
-    for j, tag in [(it, "SS397"), (iN, "neighbour")]:
+    for j, tag in [(it, get_nospace_star_name(STAR_NAME)), (iN, "neighbour")]:
         if j is None:
             continue
         write_csv_with_provenance(pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": fluxes[:, j]}),
@@ -203,18 +241,20 @@ def main():
         print(f"{tag}: медианный поток {np.median(fluxes[:, j]):.0f} e/s "
               f"(ожидание по Gaia {10 ** (0.4 * (20.44 - stars.loc[j, 't_mag'])):.0f})")
 
-    # очищенная кривая SS 397 для коллег + копия в формате пайплайна
-    dat = export_clean_lc(t, fluxes[:, it], os.path.join(OUTDIR, f"SS397_TESS_S{SECTOR}_PRF.dat"),
+    # очищенная кривая цели + копия в формате пайплайна
+    dat = export_clean_lc(t, fluxes[:, it], os.path.join(OUTDIR, f"{get_nospace_star_name(STAR_NAME)}_TESS_S{SECTOR}_PRF.dat"),
+                          star=STAR_NAME, sector=SECTOR,
                           csv_path=os.path.join(star_dir, f"light_curve_sector_{SECTOR}_prf_clean.csv"),
-                          star=STAR_NAME, sector=SECTOR, frame_no=frame_no)
-    print(f"Кривая для коллег: {dat}")
+                          frame_no=frame_no)
+    print(f"Кривая блеска: {dat}")
 
     # =========================================================================
     # звезды сравнения: сигнал свой у цели или общий для поля/инструмента?
     # (ROADMAP.md Этап 6, "Проверка происхождения сигнала")
     # =========================================================================
-    # свежие значимые частоты цели -- не захардкоженный FREQS (тот подобран
-    # вручную для карт ниже и не обязан совпадать со свежим набором после Этапа 5)
+    # свежие значимые частоты цели -- считаются один раз и переиспользуются
+    # дальше и для таблицы происхождения сигнала, и (по умолчанию) для карт
+    # амплитуд (AMP_MAP_FREQS_OVERRIDE) ниже
     t0 = t  # already BTJD = BJD-2457000 (see export_clean_lc's own header above), not full BJD
     y_target_ppt = (fluxes[:, it] / np.median(fluxes[:, it]) - 1.0) * 1e3
     target_peaks, target_extra = prewhiten(t0, y_target_ppt, fmax=CONFIG.prewhiten_fmax,
@@ -234,7 +274,7 @@ def main():
     t_quality = t_all[good]
     frame_quality = frame_no_all[good]
 
-    star_curves = [("target(SS397)", t0, y_target_ppt)]
+    star_curves = [("target", t0, y_target_ppt)]
     if target_freqs and len(comparison_stars):
         for _, cstar in comparison_stars.iterrows():
             label = f"src{int(cstar['source_id']) % 100000}(T={cstar['t_mag']:.1f})"
@@ -275,52 +315,61 @@ def main():
         print("\nНет значимых частот цели или звезд сравнения -- таблица происхождения сигнала пропущена")
 
     # --- карты амплитуд и разложение по звездам ---
-    # вычитаем подогнанный плоский фон (иначе медленные вариации рассеянного света
-    # ложатся на все пиксели и мешают на низких частотах). bkg уже посчитан выше
-    # (один lstsq для всех кадров) и просто отфильтрован маской m вместе с box/t/fluxes --
-    # пересчитывать deblend_prf_flux заново для этого не нужно, оно не зависит от
-    # того, какое подмножество кадров решается: результат для каждого кадра
-    # определяется только его собственными пикселями.
-    bx = by = BOX
-    xx, yy = np.meshgrid(np.arange(bx) - bx / 2, np.arange(by) - by / 2, indexing="ij")
-    box_nobkg = box - (bkg[:, 0, None, None] + bkg[:, 1, None, None] * xx + bkg[:, 2, None, None] * yy)
-    amaps = amplitude_maps(t, box_nobkg, FREQS)
-    lines = ["(доли ориентировочные: часть амплитуды расходится по слабым звездам модели;",
-             " главное — какая звезда несет наибольшую долю)",
-             "ν, 1/сут   " + "  ".join(f"{int(s) % 100000:>12d}" for s in stars["source_id"]) +
-             "   | SS397/(SS397+сосед) | A_SS397 / F_SS397, ppt"]
-    medF = np.median(fluxes, axis=0)
-    for k, f in enumerate(FREQS):
-        c = attribute_amplitude(amaps[k], models)
-        share = c[it] / (c[it] + c[iN]) if iN is not None else c[it] / c.sum()
-        lines.append(f"{f:8.4f}   " + "  ".join(f"{v:12.2f}" for v in c) +
-                     f"   | {share:18.2f}  | {1e3 * c[it] / medF[it]:8.2f}")
-    txt = "\n".join(lines)
-    print("\nАмплитуда (e/s), приписанная каждой звезде (последние 5 цифр source_id):\n" + txt)
-    with open(os.path.join(OUTDIR, "attribution.txt"), "w") as fo:
-        fo.write(stars[["source_id", "t_mag", "px_x", "px_y"]].to_string() + "\n\n" + txt + "\n")
+    freqs_for_maps = AMP_MAP_FREQS_OVERRIDE or target_freqs
+    if not freqs_for_maps:
+        print("\nНет значимых частот цели и AMP_MAP_FREQS_OVERRIDE не задан -- карты амплитуд "
+              "пропущены (задайте AMP_MAP_FREQS_OVERRIDE вручную, если нужно посмотреть карту для "
+              "конкретной кандидатной частоты).")
+    else:
+        # вычитаем подогнанный плоский фон (иначе медленные вариации рассеянного света
+        # ложатся на все пиксели и мешают на низких частотах). bkg уже посчитан выше
+        # (один lstsq для всех кадров) и просто отфильтрован маской m вместе с box/t/fluxes --
+        # пересчитывать deblend_prf_flux заново для этого не нужно, оно не зависит от
+        # того, какое подмножество кадров решается: результат для каждого кадра
+        # определяется только его собственными пикселями.
+        bx = by = BOX
+        xx, yy = np.meshgrid(np.arange(bx) - bx / 2, np.arange(by) - by / 2, indexing="ij")
+        box_nobkg = box - (bkg[:, 0, None, None] + bkg[:, 1, None, None] * xx + bkg[:, 2, None, None] * yy)
+        amaps = amplitude_maps(t, box_nobkg, freqs_for_maps)
+        lines = ["(доли ориентировочные: часть амплитуды расходится по слабым звездам модели;",
+                 " главное — какая звезда несет наибольшую долю)",
+                 "ν, 1/сут   " + "  ".join(f"{int(s) % 100000:>12d}" for s in stars["source_id"]) +
+                 "   | цель/(цель+сосед)    | A_цель / F_цель, ppt"]
+        medF = np.median(fluxes, axis=0)
+        for k, f in enumerate(freqs_for_maps):
+            c = attribute_amplitude(amaps[k], models)
+            share = c[it] / (c[it] + c[iN]) if iN is not None else c[it] / c.sum()
+            lines.append(f"{f:8.4f}   " + "  ".join(f"{v:12.2f}" for v in c) +
+                         f"   | {share:18.2f}  | {1e3 * c[it] / medF[it]:8.2f}")
+        txt = "\n".join(lines)
+        print("\nАмплитуда (e/s), приписанная каждой звезде (последние 5 цифр source_id):\n" + txt)
+        with open(os.path.join(OUTDIR, "attribution.txt"), "w") as fo:
+            fo.write(stars[["source_id", "t_mag", "px_x", "px_y"]].to_string() + "\n\n" + txt + "\n")
 
-    # --- рисунки ---
-    nf = len(FREQS)
-    ncol = 4
-    fig, axes = plt.subplots(int(np.ceil(nf / ncol)), ncol, figsize=(3.2 * ncol, 3.2 * np.ceil(nf / ncol)))
-    for ax, k in zip(axes.flat, range(nf)):
-        im = ax.imshow(np.abs(amaps[k]).T, origin="lower", cmap="viridis")
-        for j, s in stars.iterrows():
-            col = "r" if j == it else ("w" if j == iN else "0.7")
-            ax.plot(s["px_x"] - 1 - x0, s["px_y"] - 1 - y0, "+", color=col, ms=10 if j in (it, iN) else 5)
-        circ = plt.Circle((tgt["px_x"] - 1 - x0, tgt["px_y"] - 1 - y0), 3, fill=False, color="r", ls="--")
-        ax.add_patch(circ)
-        ax.set_title(f"ν = {FREQS[k]:.4f}", fontsize=9)
-        plt.colorbar(im, ax=ax, fraction=0.046)
-    for ax in list(axes.flat)[nf:]:
-        ax.axis("off")
-    fig.suptitle("|A| по пикселям (e/s); красный + SS 397 и апертура r=3, белый + яркий сосед")
-    fig.tight_layout()
-    fig.savefig(os.path.join(OUTDIR, "amp_maps.pdf"))
+        # --- рисунки ---
+        nf = len(freqs_for_maps)
+        ncol = 4
+        fig, axes = plt.subplots(int(np.ceil(nf / ncol)), ncol, figsize=(3.2 * ncol, 3.2 * np.ceil(nf / ncol)))
+        axes_flat = np.atleast_1d(axes).flat
+        for ax, k in zip(axes_flat, range(nf)):
+            im = ax.imshow(np.abs(amaps[k]).T, origin="lower", cmap="viridis")
+            for j, s in stars.iterrows():
+                col = "r" if j == it else ("w" if j == iN else "0.7")
+                ax.plot(s["px_x"] - 1 - x0, s["px_y"] - 1 - y0, "+", color=col, ms=10 if j in (it, iN) else 5)
+            circ = plt.Circle((tgt["px_x"] - 1 - x0, tgt["px_y"] - 1 - y0), CONFIG.aperture_radius,
+                              fill=False, color="r", ls="--")
+            ax.add_patch(circ)
+            ax.set_title(f"ν = {freqs_for_maps[k]:.4f}", fontsize=9)
+            plt.colorbar(im, ax=ax, fraction=0.046)
+        for ax in list(axes_flat)[nf:]:
+            ax.axis("off")
+        fig.suptitle(f"|A| по пикселям (e/s); красный + {STAR_NAME} и апертура "
+                     f"r={CONFIG.aperture_radius}, белый + доминирующий сосед")
+        fig.tight_layout()
+        fig.savefig(os.path.join(OUTDIR, "amp_maps.pdf"))
 
     fig, ax = plt.subplots(figsize=(12, 4))
-    for j, tag, col in [(it, "SS 397 (PRF)", "k"), (iN, "сосед (PRF)", "C3")]:
+    for j, tag, col in [(it, f"{STAR_NAME} (PRF)", "k"), (iN, "сосед (PRF)", "C3")]:
         if j is None:
             continue
         ax.plot(t, 1e3 * (fluxes[:, j] / np.median(fluxes[:, j]) - 1), ".", ms=1, color=col, label=tag)
@@ -329,9 +378,9 @@ def main():
     fig.savefig(os.path.join(OUTDIR, "lc_deblended.pdf"))
     print(f"\nГотово: {OUTDIR}/")
 
-    if RUN_TESS_AFTER:
-        import ss397_tess
-        ss397_tess.run_all(runs=[(os.path.join(star_dir, f"light_curve_sector_{SECTOR}_prf_clean.csv"), "ss397_prf"),
+    if RUN_DIAGNOSTICS_AFTER:
+        import Peridogram_diagnostics
+        Peridogram_diagnostics.run_all(runs=[(os.path.join(star_dir, f"light_curve_sector_{SECTOR}_prf_clean.csv"), "prf"),
                                  (os.path.join(OUTDIR, "lc_deblended_neighbour.csv"), "neighbour")],
                            show=False)
     if SHOW_PLOTS:

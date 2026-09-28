@@ -25,7 +25,7 @@ def quality_mask(quality, quality_bitmask=175):
     ManualExclude). `None` keeps only `QUALITY == 0` (strict); `0`/falsy
     disables the check (keeps everything).
 
-    Previously duplicated inline in `ss397_localize.py` and
+    Previously duplicated inline in `PRF_cleaning.py` and
     `prf_photometry.load_prf_light_curve` -- same formula, now one place.
     """
     quality = np.asarray(quality)
@@ -85,7 +85,7 @@ def auto_clean_light_curve(df_lc, quality_bitmask=175, star_bkg_ratio_min=None,
     # `quality_bitmask=0` means the check is disabled (e.g. a caller already
     # applied QUALITY filtering upstream and only wants rules 2/3 here) --
     # skip reading the column at all then, so a QUALITY-less DataFrame
-    # (built from an already-filtered cube, e.g. `ss397_localize.py`'s
+    # (built from an already-filtered cube, e.g. `PRF_cleaning.py`'s
     # per-star curves) doesn't need a dummy column just to pass through.
     if quality_bitmask or quality_bitmask is None:
         q_ok = quality_mask(df_lc["QUALITY"].to_numpy(), quality_bitmask)
@@ -105,7 +105,7 @@ def auto_clean_light_curve(df_lc, quality_bitmask=175, star_bkg_ratio_min=None,
         flux = df_lc["FLUX"].to_numpy()[idx]
         norm_flux = flux / np.median(flux)
         sigma = local_point_to_point_sigma(btjd[idx], norm_flux, window=local_noise_window)
-        # `>=`, mirroring `ss397_localize.py`'s original inline `sigma < kappa * median`
+        # `>=`, mirroring `PRF_cleaning.py`'s original inline `sigma < kappa * median`
         # keep-condition exactly (a kept frame satisfies strict "<"; this is its negation)
         noisy = sigma >= local_noise_kappa * np.median(sigma)
         drop_idx = idx[noisy]

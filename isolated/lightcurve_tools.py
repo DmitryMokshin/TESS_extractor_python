@@ -278,8 +278,8 @@ def local_point_to_point_sigma(t, y, window=0.25):
     per-point error proxy.
 
     Not a Julia port -- a shared replacement for three near-identical copies
-    that used to live in `ss397_localize.py` (`local_p2p_ppt`,
-    `local_noise_mask`) and `ss397_tess.py` (`local_p2p`); also the same
+    that used to live in `PRF_cleaning.py` (`local_p2p_ppt`,
+    `local_noise_mask`) and `Peridogram_diagnostics.py` (`local_p2p`); also the same
     metric ROADMAP.md's automatic-cleaning stage (Этап 5) wants for its
     "local scatter of neighbouring points > kappa * median" rule.
     """

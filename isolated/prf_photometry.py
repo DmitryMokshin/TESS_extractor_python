@@ -4,14 +4,14 @@ background) simultaneously in a small window around a target, so a bright
 neighbour's light is separated from the target's own instead of contaminating
 a plain aperture sum. See ROADMAP.md, "Этап 3. PRF-фотометрия в пакете".
 
-Ported from the `ss397_localize.py` prototype (`select_stars`, `prf_models`,
+Ported from the `PRF_cleaning.py` prototype (`select_stars`, `prf_models`,
 `design_matrix`, `deblend`) -- not a Julia port. Reuses the package's
 existing PRF machinery (`psf.add_prf_cut`, the same per-star PRF-cut
 convention `photometry.find_background_prf_gaia_mags`/`psf.create_gaia_prf_model`
 already use) instead of a new PRF implementation. Deliberately does NOT
 include the prototype's per-pixel amplitude maps / signal-attribution logic
 -- that is ROADMAP's later Этап 6 ("Проверка происхождения сигнала") and
-stays in `ss397_localize.py` for now.
+stays in `PRF_cleaning.py` for now.
 
 Star selection here uses `geometry.calc_tmag_from_gaia` (Stassun et al. 2019,
 Gaia G + BP-RP) rather than Gaia RP magnitude, deliberately scoped to just
@@ -159,7 +159,7 @@ def load_prf_light_curve(star_name, sector, cut_width, cut_height=None, box=13, 
 
     Returns the target's DataFrame. For every fitted star's flux (e.g. to
     also save a bright neighbour's curve, or build per-pixel amplitude maps
-    -- see `ss397_localize.py`), call `select_prf_model_stars` +
+    -- see `PRF_cleaning.py`), call `select_prf_model_stars` +
     `build_prf_star_cuts` + `deblend_prf_flux` directly instead: this
     function only persists the target's own curve, matching the rest of the
     pipeline's one-file-per-star convention.

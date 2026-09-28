@@ -1,6 +1,6 @@
 """
 Per-pixel amplitude maps + PRF-star attribution, and comparison-star signal
-origin checks. Not a Julia port -- ported from the `ss397_localize.py`
+origin checks. Not a Julia port -- ported from the `PRF_cleaning.py`
 prototype's `amplitude_maps`/`attribute`, generalized so any script can use
 them, plus new comparison-star machinery. See ROADMAP.md, "Этап 6. Проверка
 происхождения сигнала".

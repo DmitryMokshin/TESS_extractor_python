@@ -358,7 +358,7 @@ def save_frequency_table(path, peaks, header_lines=(), units="mmag"):
 def find_combination_frequencies(peaks, n_top=5, n_sigma=3.0):
     """
     For the `n_top` strongest "parent" frequencies, check every other (weaker)
-    frequency against their sum/difference -- same search `ss397_tess.py` used
+    frequency against their sum/difference -- same search `Peridogram_diagnostics.py` used
     to do inline, but with the tolerance now `n_sigma * sqrt(sigma_f_i^2 +
     sigma_f_j^2 + sigma_f_k^2)` (each peak's own `frequency_err` from
     `errors_mo99`) instead of a flat `0.5/T` (ROADMAP.md Этап 8, "комбинационные
