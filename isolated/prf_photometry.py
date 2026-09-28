@@ -33,6 +33,7 @@ from .data_io import (load_tess_cutouts, load_gaia_stars_in_view_data, load_star
 from .psf import get_tesscut_prf_supersampled, add_prf_cut
 from .photometry import calc_prf_contamination_fraction
 from .cleaning import quality_mask
+from .provenance import write_csv_with_provenance
 
 
 def select_prf_model_stars(gaia_stars_df, target_source_id, box_x0, box_y0, box_size,
@@ -223,5 +224,6 @@ def load_prf_light_curve(star_name, sector, cut_width, cut_height=None, box=13, 
         "FLUX": target_flux,
         "MAG": calc_tess_magnitude(np.abs(target_flux)),
     })
-    lc_df.to_csv(out_path, index=False)
+    write_csv_with_provenance(lc_df, out_path, star_name=star_name, sector=sector, box=box,
+                              dt_max=dt_max, merge_px=merge_px, quality_bitmask=quality_bitmask)
     return lc_df

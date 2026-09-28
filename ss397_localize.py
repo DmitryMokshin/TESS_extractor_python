@@ -61,6 +61,7 @@ from isolated.prf_photometry import select_prf_model_stars, build_prf_star_cuts,
 from isolated.localize import amplitude_maps, attribute_amplitude, select_comparison_stars, \
     deblend_star_curve, signal_origin_table
 from isolated.prewhitening import prewhiten
+from isolated.provenance import provenance_header, write_csv_with_provenance
 from run_config import CONFIG
 
 # =============================================================================
@@ -103,15 +104,20 @@ def export_clean_lc(t, flux, dat_path, csv_path=None, star="SS 397", sector=80, 
     ppt = (flux / med - 1.0) * 1e3
     err = local_point_to_point_sigma(t, ppt)
     dmag = -2.5 * np.log10(flux / med)
-    hdr = (f"{star}, TESS sector {sector}: PRF-photometry light curve (deblended from Gaia neighbours)\n"
-           f"frames: TESScut FFI, cadence 200 s; QUALITY bitmask {QUALITY_BITMASK} removed; points with local\n"
-           f"point-to-point noise > {LOCAL_NOISE_KAPPA} x median removed. {note}\n"
-           f"N = {t.size}, median flux = {med:.1f} e/s, median sigma = {np.median(err):.2f} ppt\n"
-           f"columns: BJD-2457000  dF/F[ppt]  sigma[ppt]  dmag[mag]  FLUX[e/s]")
-    np.savetxt(dat_path, np.c_[t, ppt, err, dmag, flux], fmt="%.6f %9.3f %7.3f %9.5f %11.3f", header=hdr)
+    header_lines = provenance_header(n_points=t.size, star_name=star, sector=sector,
+                                     quality_bitmask=QUALITY_BITMASK, local_noise_kappa=LOCAL_NOISE_KAPPA) + [
+        f"{star}, TESS sector {sector}: PRF-photometry light curve (deblended from Gaia neighbours)",
+        f"frames: TESScut FFI, cadence 200 s; QUALITY bitmask {QUALITY_BITMASK} removed; points with local",
+        f"point-to-point noise > {LOCAL_NOISE_KAPPA} x median removed. {note}",
+        f"median flux = {med:.1f} e/s, median sigma = {np.median(err):.2f} ppt",
+        "columns: BJD-2457000  dF/F[ppt]  sigma[ppt]  dmag[mag]  FLUX[e/s]",
+    ]
+    np.savetxt(dat_path, np.c_[t, ppt, err, dmag, flux], fmt="%.6f %9.3f %7.3f %9.5f %11.3f",
+              header="\n".join(header_lines))
     if csv_path:
-        pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": flux, "MAG": calc_tess_magnitude(flux)}).to_csv(
-            csv_path, index=False)
+        write_csv_with_provenance(pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": flux,
+                                                "MAG": calc_tess_magnitude(flux)}),
+                                  csv_path, star_name=star, sector=sector)
     return dat_path
 
 
@@ -165,9 +171,12 @@ def main():
     # isolated.prf_photometry.load_prf_light_curve; сохраняем сами, чтобы не гонять
     # деблендинг по 13000 кадров дважды
     os.makedirs(star_dir, exist_ok=True)
-    pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": fluxes[:, it],
-                  "MAG": calc_tess_magnitude(np.abs(fluxes[:, it]))}).to_csv(
-        os.path.join(star_dir, f"light_curve_sector_{SECTOR}_prf.csv"), index=False)
+    write_csv_with_provenance(
+        pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": fluxes[:, it],
+                     "MAG": calc_tess_magnitude(np.abs(fluxes[:, it]))}),
+        os.path.join(star_dir, f"light_curve_sector_{SECTOR}_prf.csv"),
+        star_name=STAR_NAME, sector=SECTOR, box=BOX, dt_max=DT_MAX, merge_px=MERGE_PX,
+        quality_bitmask=QUALITY_BITMASK)
 
     # отбраковка по шуму PRF-кривой цели (правило 3, ROADMAP.md Этап 5) -- через общую
     # auto_clean_light_curve (bitmask=0: правило 1 уже применено выше), для _prf_clean.csv
@@ -188,8 +197,9 @@ def main():
     for j, tag in [(it, "SS397"), (iN, "neighbour")]:
         if j is None:
             continue
-        pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": fluxes[:, j]}).to_csv(
-            os.path.join(OUTDIR, f"lc_deblended_{tag}.csv"), index=False)
+        write_csv_with_provenance(pd.DataFrame({"BTJD": t, "FRAME": frame_no, "FLUX": fluxes[:, j]}),
+                                  os.path.join(OUTDIR, f"lc_deblended_{tag}.csv"),
+                                  star_name=STAR_NAME, sector=SECTOR, tag=tag, box=BOX)
         print(f"{tag}: медианный поток {np.median(fluxes[:, j]):.0f} e/s "
               f"(ожидание по Gaia {10 ** (0.4 * (20.44 - stars.loc[j, 't_mag'])):.0f})")
 
@@ -250,7 +260,10 @@ def main():
 
         origin_table = signal_origin_table(star_curves, target_freqs, fmax=CONFIG.prewhiten_fmax,
                                             snr_threshold=CONFIG.snr_stop)
-        origin_table.to_csv(os.path.join(OUTDIR, "comparison_stars.csv"), index=False)
+        write_csv_with_provenance(origin_table, os.path.join(OUTDIR, "comparison_stars.csv"),
+                                  star_name=STAR_NAME, sector=SECTOR, n_comparison=N_COMPARISON,
+                                  comparison_mag_tol=COMPARISON_MAG_TOL,
+                                  target_freqs=[round(f, 4) for f in target_freqs])
         pivot = origin_table.pivot(index="LABEL", columns="FREQUENCY", values="SNR_LOCAL").round(1)
         summary = (f"S/N_local по частотам цели (порог значимости S/N >= {CONFIG.snr_stop}; "
                    f"да/нет -- колонка PRESENT в comparison_stars.csv):\n{pivot.to_string()}")

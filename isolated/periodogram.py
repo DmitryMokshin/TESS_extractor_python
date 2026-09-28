@@ -29,6 +29,7 @@ from .config import STAR_DIRECTORY
 from .geometry import get_nospace_star_name
 from .stats import cleaned_jds_mags
 from .lightcurve_tools import find_sampling
+from .provenance import provenance_header
 
 
 def suggest_period_range(mjd, nyquist_factor=2.0, max_period_fraction=1.0):
@@ -153,6 +154,8 @@ def save_periodogram(star_name, sector, freq, power, ls, cut_width, cut_height=N
 
     levels = ls.false_alarm_level(fap_levels, method=fap_method)
     header_lines = [
+        *provenance_header(n_points=len(freq), star_name=star_name, sector=sector, fap_method=fap_method),
+        "",
         "Lomb-Scargle periodogram",
         f"star: {star_name}, sector: {sector}",
         f"FAP method: {fap_method}",

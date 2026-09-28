@@ -25,6 +25,7 @@ from .fits_utils import get_tesscut_corners
 from .databases import get_star_gaia_data
 from .tess_queries import get_tess_cutouts as _download_tess_cutouts
 from .databases import _run_query, _gaia as _gaia_tap
+from .provenance import write_csv_with_provenance
 
 
 def _read_gaia_csv(path: str) -> pd.DataFrame:
@@ -33,9 +34,11 @@ def _read_gaia_csv(path: str) -> pd.DataFrame:
     may have been written before column names were normalized to lowercase
     (see isolated.databases._run_query) -- reading through this helper
     instead of bare pd.read_csv makes old caches self-heal instead of
-    raising KeyError on columns like 'source_id'.
+    raising KeyError on columns like 'source_id'. `comment="#"` skips the
+    provenance header (ROADMAP.md Этап 10, isolated.provenance) newer files
+    have; a pre-Этап-10 file with no such header is unaffected.
     """
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, comment="#")
     df.columns = [str(c).lower() for c in df.columns]
     return df
 
@@ -52,8 +55,10 @@ def read_light_curve_csv(path: str) -> pd.DataFrame:
     say "BTJD"/"STAR_BKG_RATIO"; old ones get renamed on the fly so every
     caller can just use the new names either way. Not a Julia port -- same
     self-healing idea as `_read_gaia_csv`, for a different file family.
+    `comment="#"` skips the provenance header (ROADMAP.md Этап 10,
+    isolated.provenance) newer files have.
     """
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, comment="#")
     renames = {}
     if "BTJD" not in df.columns and "MJD" in df.columns:
         renames["MJD"] = "BTJD"
@@ -175,7 +180,7 @@ def load_star_gaia_data(star_name, star_directory=STAR_DIRECTORY) -> pd.Series:
 
     if not os.path.isfile(gaia_data_file):
         data = get_star_gaia_data(star_name)
-        pd.DataFrame([data]).to_csv(gaia_data_file, index=False)
+        write_csv_with_provenance(pd.DataFrame([data]), gaia_data_file, star_name=star_name)
         return data
     return _read_gaia_csv(gaia_data_file).iloc[0]
 
@@ -358,7 +363,8 @@ def load_gaia_stars_in_view_data(star_name, cut_fits, d_mag_r=5.0, rewrite_file=
             stars_x[i], stars_y[i] = xy
 
         data = data.assign(px_x=stars_x, px_y=stars_y)
-        data.to_csv(gaia_stars_file, index=False)
+        write_csv_with_provenance(data, gaia_stars_file, star_name=star_name, sector=sector,
+                                  d_mag_r=d_mag_r, mag_cutoff=mag_cutoff)
         gaia_stars_df = data
     else:
         gaia_stars_df = _read_gaia_csv(gaia_stars_file)
@@ -503,7 +509,9 @@ def load_light_curve(star_name, sector, cut_width, cut_height=None, d_mag_r=5.0,
             "CENTROID_X": centroid_x,
             "CENTROID_Y": centroid_y,
         })
-        lc_df.to_csv(light_curve_file, index=False)
+        write_csv_with_provenance(lc_df, light_curve_file, star_name=star_name, sector=sector,
+                                  cut_width=cut_width, cut_height=cut_height,
+                                  aperture_radius=aperture_radius, d_mag_r=d_mag_r)
         return lc_df
 
     return read_light_curve_csv(light_curve_file)

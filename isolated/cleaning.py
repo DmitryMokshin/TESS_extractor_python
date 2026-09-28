@@ -13,6 +13,7 @@ import pandas as pd
 from .config import STAR_DIRECTORY
 from .geometry import get_nospace_star_name
 from .lightcurve_tools import local_point_to_point_sigma
+from .provenance import write_csv_with_provenance
 
 
 def quality_mask(quality, quality_bitmask=175):
@@ -159,5 +160,5 @@ def save_cleaning_log(log_df, star_name, sector, cut_width, cut_height=None,
     out_dir = os.path.join(star_directory, get_nospace_star_name(star_name), f"{cut_width}x{cut_height}")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"light_curve_sector_{sector}{suffix}_log.csv")
-    log_df.to_csv(out_path, index=False)
+    write_csv_with_provenance(log_df, out_path, star_name=star_name, sector=sector, suffix=suffix)
     return out_path

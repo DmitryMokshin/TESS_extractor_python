@@ -37,6 +37,7 @@ from isolated.multisector import stitch_sector_csvs
 from isolated.prewhitening import (prewhiten, format_frequency_table, save_frequency_table,
                                    plot_amplitude_spectrum, plot_prewhitening_fit,
                                    dynamic_spectrum, plot_dynamic_spectrum)
+from isolated.provenance import provenance_header
 
 
 def _analyse_prepared_series(t, y_raw, base, title, name_file_data, plot_star_name, plot_sector,
@@ -87,9 +88,10 @@ def _analyse_prepared_series(t, y_raw, base, title, name_file_data, plot_star_na
                                         cut_width=cadr_width, cut_height=cadr_height, peaks=peaks_ls)
         else:                                        # своя кривая — свой файл, основной не трогаем
             dat_path = f"{base}.dat"
-            np.savetxt(dat_path, np.column_stack([freq, power]), fmt="%.6f %.6e",
-                       header=f"Lomb-Scargle periodogram (detrend deg {detrend_deg}), {name_file_data}\n"
-                              "frequency[1/d] power")
+            header_lines = provenance_header(n_points=freq.size, star_name=plot_star_name, sector=plot_sector,
+                                             detrend_deg=detrend_deg) + [
+                f"Lomb-Scargle periodogram, {name_file_data}", "frequency[1/d] power"]
+            np.savetxt(dat_path, np.column_stack([freq, power]), fmt="%.6f %.6e", header="\n".join(header_lines))
         plot_periodogram(plot_star_name, plot_sector, freq, power, ls, peaks=peaks_ls,
                          out_path=dat_path.replace(".dat", f".{image_format}"),
                          max_peaks_for_plotting=max_peaks_analyse)
@@ -103,6 +105,7 @@ def _analyse_prepared_series(t, y_raw, base, title, name_file_data, plot_star_na
           f"sigma(остатков) = {extra['sigma_res']:.2f} mmag, D = {extra['D']:.1f}")
     print(table)
     save_frequency_table(f"{base}_frequencies.dat", peaks, header_lines=[
+        *provenance_header(star_name=plot_star_name, sector=plot_sector, detrend_deg=detrend_deg),
         f"{title}, file {name_file_data}",
         f"N = {t.size}, T = {T:.3f} d, 1/T = {1 / T:.4f} 1/d, 1.5/T = {1.5 / T:.4f} 1/d",
         f"prewhitening: trend deg {detrend_deg}, S/N stop {snr_stop}, fmax {prewhiten_fmax} 1/d",

@@ -23,6 +23,7 @@ from .config import STAR_DIRECTORY, TESS_MAX_SECTORS
 from .geometry import get_nospace_star_name, get_true_jd
 from .tess_point import find_tess_sectors
 from .data_io import load_light_curve
+from .provenance import write_csv_with_provenance
 
 
 def delete_nans(jds, fluxs):
@@ -212,7 +213,7 @@ def save_clean_light_curve(df_lc, star_name, sector, cut_width, cut_height=None,
     out_dir = os.path.join(star_directory, get_nospace_star_name(star_name), f"{cut_width}x{cut_height}")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"light_curve_sector_{sector}_clean.csv")
-    df_lc.to_csv(out_path, index=False)
+    write_csv_with_provenance(df_lc, out_path, star_name=star_name, sector=sector)
     return out_path
 
 
@@ -234,7 +235,7 @@ def save_trash_light_curve(df_trash, star_name, sector, windows, cut_width, cut_
     os.makedirs(out_dir, exist_ok=True)
     windows_tag = "_".join(f"{start}-{end}" for start, end in windows)
     out_path = os.path.join(out_dir, f"light_curve_sector_{sector}_trash_frames_{windows_tag}.csv")
-    df_trash.to_csv(out_path, index=False)
+    write_csv_with_provenance(df_trash, out_path, star_name=star_name, sector=sector, windows=windows)
     return out_path
 
 
