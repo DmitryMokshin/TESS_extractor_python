@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from .config import STAR_DIRECTORY
+from .plotting import finish_figure
 from .data_io import load_tess_cutouts, load_star_gaia_data, load_gaia_stars_in_view_data, find_target_row
 from .geometry import calc_tess_magnitude
 from .viewer import plot_cuts, get_frame
@@ -206,14 +207,13 @@ def plot_stray_light_diagnostics(star_name, sector, cut_width, cut_height, df_lc
     fig.colorbar(im, ax=(ax_quiet, ax_peak), label="lg TESS flux", fraction=0.05)
 
     if out_path:
-        fig.savefig(out_path, dpi=150)
-        plt.close(fig)
-        return out_path
-    plt.show()
+        return finish_figure(fig, out_path)
+    plt.show()   # без out_path рисунок некуда сохранить -- показываем, как раньше
     return fig
 
 
-def correct_stray_light(df_lc, df_monitor, aperture_radius=3, plot=False, star_name="", sector=None):
+def correct_stray_light(df_lc, df_monitor, aperture_radius=3, plot=False, star_name="", sector=None,
+                        out_path=None):
     """
     Roughly correct the target's light curve for the artifact diagnosed by
     `stray_light_monitor_curve`: at each frame, take the monitor's flux
@@ -233,9 +233,10 @@ def correct_stray_light(df_lc, df_monitor, aperture_radius=3, plot=False, star_n
     (see `load_light_curve`'s `aperture_radius`).
 
     Returns a corrected copy of df_lc (FLUX and MAG columns updated,
-    df_lc/df_monitor left untouched). If plot=True, also shows the
+    df_lc/df_monitor left untouched). If plot=True, also plots the
     original vs. corrected target curve alongside the monitor curve for a
-    quick visual check.
+    quick visual check: saved to `out_path` if given (see `plotting.finish_figure`),
+    otherwise shown in a window.
     """
     baseline = np.median(df_monitor["FLUX"].to_numpy())
     excess = np.clip(df_monitor["FLUX"].to_numpy() - baseline, 0, None)
@@ -262,6 +263,9 @@ def correct_stray_light(df_lc, df_monitor, aperture_radius=3, plot=False, star_n
         ax2.set_ylabel("stray-light\nmonitor (MAG)")
 
         fig.tight_layout()
-        plt.show()
+        if out_path:
+            finish_figure(fig, out_path)
+        else:
+            plt.show()   # без out_path рисунок некуда сохранить -- показываем, как раньше
 
     return df_corrected

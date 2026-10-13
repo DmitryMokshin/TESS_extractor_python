@@ -76,6 +76,7 @@ from isolated.localize import amplitude_maps, attribute_amplitude, select_compar
     deblend_star_curve, signal_origin_table
 from isolated.prewhitening import prewhiten
 from isolated.provenance import provenance_header, write_csv_with_provenance
+from isolated.plotting import finish_figure, set_show_plots, print_saved_summary
 from run_config import CONFIG
 
 # =============================================================================
@@ -104,7 +105,7 @@ COMPARISON_MAG_TOL = 1.0
 QUALITY_BITMASK = CONFIG.quality_bitmask
 LOCAL_NOISE_KAPPA = CONFIG.local_noise_kappa  # отбраковка "_prf_clean": локальный шум > KAPPA × медиана
 RUN_DIAGNOSTICS_AFTER = True     # сразу прогнать Peridogram_diagnostics.analyse по разделенным кривым
-SHOW_PLOTS = True         # открыть окна с рисунками в конце (PDF сохраняются всегда)
+SHOW_PLOTS = CONFIG.show_plots   # False: рисунки только сохраняются, пути -- в консоли (run_config.py)
 
 
 def export_clean_lc(t, flux, dat_path, star, sector, csv_path=None, note="", frame_no=None):
@@ -140,6 +141,7 @@ def export_clean_lc(t, flux, dat_path, star, sector, csv_path=None, note="", fra
 # =============================================================================
 def main():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))   # пути пакета isolated относительные
+    set_show_plots(SHOW_PLOTS)
     os.makedirs(OUTDIR, exist_ok=True)
     star_dir = os.path.join("stars_python", get_nospace_star_name(STAR_NAME), f"{CUT}x{CUT}")
 
@@ -366,7 +368,7 @@ def main():
         fig.suptitle(f"|A| по пикселям (e/s); красный + {STAR_NAME} и апертура "
                      f"r={CONFIG.aperture_radius}, белый + доминирующий сосед")
         fig.tight_layout()
-        fig.savefig(os.path.join(OUTDIR, "amp_maps.pdf"))
+        finish_figure(fig, os.path.join(OUTDIR, "amp_maps.pdf"), dpi=None)
 
     fig, ax = plt.subplots(figsize=(12, 4))
     for j, tag, col in [(it, f"{STAR_NAME} (PRF)", "k"), (iN, "сосед (PRF)", "C3")]:
@@ -375,8 +377,15 @@ def main():
         ax.plot(t, 1e3 * (fluxes[:, j] / np.median(fluxes[:, j]) - 1), ".", ms=1, color=col, label=tag)
     ax.set_xlabel("BTJD"); ax.set_ylabel("ΔF / F, ppt"); ax.legend(markerscale=8)
     fig.tight_layout()
-    fig.savefig(os.path.join(OUTDIR, "lc_deblended.pdf"))
-    print(f"\nГотово: {OUTDIR}/")
+    finish_figure(fig, os.path.join(OUTDIR, "lc_deblended.pdf"), dpi=None)
+    print(f"\nГотово: {os.path.abspath(OUTDIR)}/")
+
+    print_saved_summary("PRF_cleaning: рисунки и таблицы", extra_files=[
+        os.path.join(OUTDIR, n) for n in ("comparison_stars.csv", "comparison_stars.txt", "attribution.txt",
+                                          f"lc_deblended_{get_nospace_star_name(STAR_NAME)}.csv",
+                                          "lc_deblended_neighbour.csv",
+                                          f"{get_nospace_star_name(STAR_NAME)}_TESS_S{SECTOR}_PRF.dat")] +
+        [os.path.join(star_dir, f"light_curve_sector_{SECTOR}_prf_clean.csv"), log_path])
 
     if RUN_DIAGNOSTICS_AFTER:
         import Peridogram_diagnostics

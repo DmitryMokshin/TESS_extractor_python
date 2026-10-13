@@ -211,6 +211,11 @@ if __name__ == "__main__":
     # CONFIG.sectors (Этап 7) -- если задан (больше одного сектора), анализ идет по
     # объединенному ряду; иначе (по умолчанию) -- как раньше, один CONFIG.sector.
     from run_config import CONFIG
+    import matplotlib.pyplot as plt
+    from isolated.plotting import set_show_plots, print_saved_summary
+
+    # рисунки только сохраняются (пути печатаются), окна -- если show_plots=True в run_config.py
+    set_show_plots(CONFIG.show_plots)
 
     if CONFIG.sectors:
         periodogram_compute_analise_multisector(
@@ -228,3 +233,7 @@ if __name__ == "__main__":
             lc_suffix=CONFIG.lc_suffix, detrend_deg=CONFIG.detrend_deg,
             prewhiten_fmax=CONFIG.prewhiten_fmax, snr_stop=CONFIG.snr_stop, n_max_freq=CONFIG.n_max_freq,
             dyn_window=CONFIG.dyn_window, dyn_step=CONFIG.dyn_step, dyn_frange=CONFIG.dyn_frange)
+
+    print_saved_summary("Peridogram_compute: рисунки")
+    if CONFIG.show_plots:
+        plt.show()

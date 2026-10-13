@@ -42,6 +42,7 @@ from isolated.prewhitening import (amp_spectrum, window_function, prewhiten, red
                                    find_combination_frequencies, bootstrap_frequency_errors,
                                    split_half_frequency_errors, frequency_stability,
                                    plot_frequency_stability, clean_periodogram, plot_clean_spectrum)
+from isolated.plotting import finish_figure, set_show_plots, print_saved_summary
 from run_config import CONFIG
 
 # =============================================================================
@@ -74,7 +75,8 @@ GROUND_OBS_UT = None        # например ("2024-06-24T19:30", "2024-06-24T
 # частоты для сравнения на рисунках (напр. из другой публикации/каталога по
 # этой же звезде); пусто -- не рисовать
 COMPARISON_FREQS = []
-SHOW_PLOTS = True    # открыть окна с рисунками в конце (PDF сохраняются всегда)
+SHOW_PLOTS = CONFIG.show_plots   # False: рисунки только сохраняются, пути -- в консоли (run_config.py)
+set_show_plots(SHOW_PLOTS)
 
 # --- частотный анализ, дальше (ROADMAP.md Этап 8) -- специфично для этого
 # шага (как COMPARISON_FREQS/GROUND_OBS_UT выше), не в run_config.py.
@@ -255,7 +257,7 @@ def analyse(path, tag="target", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10
     ax[0].set_ylabel("ΔF, ppt"); ax[0].legend(fontsize=8, markerscale=6)
     ax[1].set_ylabel("шум, ppt"); ax[1].set_xlabel("BJD − 2457000")
     ax[1].set_yscale("log")
-    fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_lc_quality.pdf"))
+    fig.tight_layout(); finish_figure(fig, os.path.join(outdir, f"{tag}_lc_quality.pdf"), dpi=None)
 
     # 2) амплитудный спектр, остатки, красный шум, окно
     fg = np.arange(0.5 / T_all, fmax, 0.1 / T_all)
@@ -285,7 +287,7 @@ def analyse(path, tag="target", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10
     if len(comparison_freqs):
         ax[1].text(0.01, 0.95, "синие — найденные здесь, оранжевые — переданные для сравнения (COMPARISON_FREQS)",
                    transform=ax[1].transAxes, fontsize=7, va="top")
-    fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_amplitude_spectrum.pdf"))
+    fig.tight_layout(); finish_figure(fig, os.path.join(outdir, f"{tag}_amplitude_spectrum.pdf"), dpi=None)
 
     # 3) динамический амплитудный спектр
     tt, yy = R["t"], R["y"]
@@ -315,7 +317,7 @@ def analyse(path, tag="target", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10
         ax2 = ax[1].twiny()
         ax2.plot(track[:, 1], track[:, 0], "C3.", ms=3)
         ax2.set_xlabel("ν пика", color="C3")
-    fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_dynamic_spectrum.pdf"))
+    fig.tight_layout(); finish_figure(fig, os.path.join(outdir, f"{tag}_dynamic_spectrum.pdf"), dpi=None)
     if track.size:
         P(f"\nДинамический спектр (окно {dyn_win} сут, разрешение ~{1 / dyn_win:.2f} 1/сут — "
           f"близкие частоты в одном окне НЕ разделяются):")
@@ -332,7 +334,7 @@ def analyse(path, tag="target", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10
         ax.axvspan(g1, g2, color="C0", alpha=0.3)
         ax.set_xlabel("BJD − 2457000"); ax.set_ylabel("ΔF, ppt")
         ax.set_title("TESS вокруг окна внешних наблюдений")
-        fig.tight_layout(); fig.savefig(os.path.join(outdir, f"{tag}_ground_obs.pdf"))
+        fig.tight_layout(); finish_figure(fig, os.path.join(outdir, f"{tag}_ground_obs.pdf"), dpi=None)
         sb = (t >= g1) & (t <= g2)
         P(f"\nВнешние наблюдения {ground_obs_ut[0]} – {ground_obs_ut[1]} UT = BTJD {g1:.3f}–{g2:.3f}: "
           f"точек TESS {sb.sum()}, из них хороших {np.sum(sb & good)}; "
@@ -342,6 +344,7 @@ def analyse(path, tag="target", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10
     print(txt)
     with open(os.path.join(outdir, f"{tag}_report.txt"), "w") as fo:
         fo.write(txt + "\n")
+    print(f"   отчет: {os.path.abspath(os.path.join(outdir, f'{tag}_report.txt'))}")
 
     # LaTeX-фрагмент таблицы частот (набор strict), готовый для вставки в текст
     fr, sf, am, sa, sl, sr = results["strict"]["table"]
@@ -350,12 +353,15 @@ def analyse(path, tag="target", outdir="out_tess", fmax=5.0, nmax=15, dyn_win=10
         for i in range(fr.size):
             fo.write(f"{i + 1} & ${fr[i]:.4f}\\pm{sf[i]:.4f}$ & ${1 / fr[i]:.4f}\\pm{sf[i] / fr[i] ** 2:.4f}$ & "
                      f"${am[i]:.2f}\\pm{sa[i]:.2f}$ & {sl[i]:.1f} & {sr[i]:.1f} \\\\\n")
+    print(f"   таблица частот (LaTeX): {os.path.abspath(os.path.join(outdir, f'{tag}_freqs.tex'))}")
     return results
 
 
 def run_all(runs=None, show=SHOW_PLOTS):
     """Прогнать analyse() по списку RUNS. Работает из корня проекта."""
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    from isolated import plotting
+    first_saved = len(plotting.SAVED)
     done = []
     for path, tag in (runs or RUNS):
         if not os.path.isfile(path):
@@ -370,7 +376,10 @@ def run_all(runs=None, show=SHOW_PLOTS):
                do_stability=DO_STABILITY, stability_window=STABILITY_WINDOW, stability_step=STABILITY_STEP,
                do_clean=DO_CLEAN, clean_gain=CLEAN_GAIN, clean_niter=CLEAN_NITER)
         done.append(tag)
-    print(f"\nГотово: {', '.join(done) or 'ничего'} -> {OUTDIR}/")
+    print(f"\nГотово: {', '.join(done) or 'ничего'} -> {os.path.abspath(OUTDIR)}/")
+    print_saved_summary("Peridogram_diagnostics: рисунки и отчеты",
+                        extra_files=[os.path.join(OUTDIR, f"{tag}_{kind}") for tag in done
+                                     for kind in ("report.txt", "freqs.tex")], since=first_saved)
     if show and done:
         plt.show()
 
