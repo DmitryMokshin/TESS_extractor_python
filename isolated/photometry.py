@@ -396,3 +396,27 @@ def find_dominant_contaminant(star_px_x, star_px_y, stars_x, stars_y, stars_flux
         return None, 0.0
     best = int(others[np.argmax(aperture_fluxes[others])])
     return best, float(aperture_fluxes[best] / total)
+
+
+def rank_contaminants(star_px_x, star_px_y, stars_x, stars_y, stars_flux,
+                       supersampled_prf, cut_size, aperture_radius, n=3, min_fraction=0.02):
+    """
+    Several contaminating neighbours instead of just the strongest one
+    (`find_dominant_contaminant`): the field stars OTHER than the target,
+    ordered by their share of the aperture's total PRF-modeled flux
+    (descending), keeping at most `n` of them and only those with a share of
+    at least `min_fraction`. Same star-list convention and computation
+    (`_prf_aperture_fluxes`) as `calc_prf_contamination_fraction`.
+
+    Returns a list of `(index, fraction)`, `index` into `stars_x`/`stars_y`/
+    `stars_flux`; empty if the target is alone or nobody reaches `min_fraction`.
+    """
+    aperture_fluxes, target_idx = _prf_aperture_fluxes(
+        star_px_x, star_px_y, stars_x, stars_y, stars_flux, supersampled_prf, cut_size, aperture_radius)
+    total = aperture_fluxes.sum()
+    if not total:
+        return []
+    others = np.delete(np.arange(aperture_fluxes.size), target_idx)
+    order = others[np.argsort(-aperture_fluxes[others])]
+    ranked = [(int(i), float(aperture_fluxes[i] / total)) for i in order]
+    return [(i, frac) for i, frac in ranked if frac >= min_fraction][:n]

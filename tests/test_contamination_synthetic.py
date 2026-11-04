@@ -18,6 +18,8 @@ Checks:
     `find_dominant_contaminant` picks the close bright one, not the far
     faint one.
   - one star (target only): `find_dominant_contaminant` returns (None, 0.0).
+  - `rank_contaminants`: several neighbours ordered by aperture share,
+    `n` cap, `min_fraction` cut, first entry == `find_dominant_contaminant`.
 
 Plain script with asserts -- matches the other tests in this directory.
 Run directly:
@@ -31,7 +33,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from isolated.photometry import calc_prf_contamination_fraction, find_dominant_contaminant
+from isolated.photometry import calc_prf_contamination_fraction, find_dominant_contaminant, rank_contaminants
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -93,10 +95,34 @@ def test_single_star_no_neighbour(prf):
     print("single star: find_dominant_contaminant -> (None, 0.0), contamination fraction -> 1.0 -- OK")
 
 
+def test_rank_contaminants(prf):
+    stars_x = np.array([TARGET_PX[0], TARGET_PX[0] + 3.2, TARGET_PX[0] - 4.5, TARGET_PX[0] + 20.0])
+    stars_y = np.array([TARGET_PX[1], TARGET_PX[1] + 0.5, TARGET_PX[1] + 1.0, TARGET_PX[1]])
+    stars_flux = np.array([12000.0, 18000.0, 9000.0, 50000.0])  # [target, close bright, farther fainter, far bright]
+    args = (TARGET_PX[0], TARGET_PX[1], stars_x, stars_y, stars_flux, prf, CUT_SIZE, APERTURE_RADIUS)
+
+    ranked = rank_contaminants(*args, n=5, min_fraction=0.0)
+    assert [i for i, _ in ranked][:2] == [1, 2], f"expected close bright then farther fainter first, got {ranked}"
+    fracs = [f for _, f in ranked]
+    assert fracs == sorted(fracs, reverse=True), f"fractions must be descending, got {fracs}"
+    assert 0 not in [i for i, _ in ranked], "the target itself must never appear as its own contaminant"
+
+    assert len(rank_contaminants(*args, n=1, min_fraction=0.0)) == 1
+    cut = rank_contaminants(*args, n=5, min_fraction=fracs[1] * 1.01)
+    assert [i for i, _ in cut] == [1], f"min_fraction must drop weaker stars, got {cut}"
+
+    top_idx, top_frac = find_dominant_contaminant(*args)
+    assert ranked[0][0] == top_idx and abs(ranked[0][1] - top_frac) < 1e-12
+    assert rank_contaminants(TARGET_PX[0], TARGET_PX[1], stars_x[:1], stars_y[:1], stars_flux[:1],
+                             prf, CUT_SIZE, APERTURE_RADIUS) == []
+    print(f"rank_contaminants: order {[i for i, _ in ranked]}, fractions {[round(f, 3) for f in fracs]} -- OK")
+
+
 if __name__ == "__main__":
     prf = load_real_prf()
     test_two_stars_neighbour_fraction_complements_target(prf)
     test_three_stars_picks_close_bright_not_far_faint(prf)
     test_single_star_no_neighbour(prf)
+    test_rank_contaminants(prf)
 
     print("\nALL CHECKS PASSED")
