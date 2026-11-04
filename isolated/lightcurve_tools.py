@@ -21,6 +21,7 @@ from tqdm.auto import tqdm
 
 from .config import STAR_DIRECTORY, TESS_MAX_SECTORS
 from .geometry import get_nospace_star_name, get_true_jd
+from .plotting import finish_figure
 from .tess_point import find_tess_sectors
 from .data_io import load_light_curve
 from .provenance import write_csv_with_provenance
@@ -330,8 +331,7 @@ def save_lc_figure(star_name, sector, cut_size, d_mag_r=5.0, aperture_radius=3, 
     target_dir = os.path.join(out_dir, f"{cut_size}x{cut_size}")
     os.makedirs(target_dir, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(os.path.join(target_dir, f"{nospace_star_name}_sector_{sector}.png"), dpi=150)
-    plt.close(fig)
+    finish_figure(fig, os.path.join(target_dir, f"{nospace_star_name}_sector_{sector}.png"))
 
 
 def get_all_data(star_names, cut_size, rewrite_files=False, aperture_radius=3, d_mag_r=5.0,

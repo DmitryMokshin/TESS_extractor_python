@@ -15,10 +15,14 @@ windows_frames уже урезанную кривую -- номера кадро
 те кадры. Резать сразу оба набора окон за один проход -- единственный
 надёжный способ.
 """
+import os
+
 import pandas as pd
 
 from isolated.data_io import load_star_gaia_data, load_light_curve
 from isolated.tess_point import find_tess_sectors
+from isolated.geometry import get_nospace_star_name
+from isolated.plotting import set_show_plots, print_saved_summary
 from isolated.config import TESS_MAX_SECTORS
 from isolated.cleaning import auto_clean_light_curve, save_cleaning_log, summarize_cleaning_log
 from isolated.lightcurve_tools import exclude_frame_windows, pick_exclusion_windows, save_clean_light_curve, \
@@ -77,8 +81,11 @@ def clean_sector(star_name, sector, cut_width, cut_height=None):
     print("Окна чистки по кадрам:", windows_frames)
 
     # диагностика по ИСХОДНОЙ df_lc (см. пояснение в докстринге модуля выше)
+    # рисунок не открывается, а сохраняется рядом с кривыми блеска (путь печатается в консоли)
+    diag_path = os.path.join("stars_python", get_nospace_star_name(star_name), f"{cut_width}x{cut_height}",
+                             f"stray_light_diagnostics_sector_{sector}.png")
     plot_stray_light_diagnostics(star_name, sector, cut_width, cut_height, df_lc, df_monitor,
-                                  windows=windows_frames)
+                                  windows=windows_frames, out_path=diag_path)
 
     # 3. Вырезаем оба набора ручных окон одним проходом по уже автоочищенной кривой
     all_windows = windows_lc + windows_frames
@@ -108,6 +115,14 @@ if __name__ == "__main__":
     sectors = find_tess_sectors(float(gaia["ra"]), float(gaia["dec"]), TESS_MAX_SECTORS)
     print("Секторы:", sectors)
 
+    # окна выбора (точечная чистка, полосы засветки) интерактивные и открываются всегда;
+    # остальные рисунки только сохраняются (show_plots=False в run_config.py)
+    set_show_plots(CONFIG.show_plots)
+
     print("Обработка сектора:", TESS_SECTOR)
     print("=" * 70)
     clean_sector(STAR_NAME, TESS_SECTOR, CUT_WIDTH, CUT_HEIGHT)
+    print_saved_summary("TESS_cleaning: рисунки")
+    if CONFIG.show_plots:
+        import matplotlib.pyplot as plt
+        plt.show()

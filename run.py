@@ -117,7 +117,7 @@ def main():
 
     # 5. Вывод кривой блеска звезды в png картинку
     save_lc_figure(star_name=STAR_NAME, sector=sector, cut_size=CUT_WIDTH, day_step=2,
-                    jd_box=0.3, sigma_tol=5, n_out=10)
+                    jd_box=0.3, sigma_tol=5, n_out=10)   # PNG сохраняется, путь печатается в консоли
 
     # 6. Сохранение видео-отрывков -- по желанию
     save_video = ask_yes_no("Сохранить видео-отрывки по кадрам сектора?", default=False)

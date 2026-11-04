@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 from astropy.timeseries import LombScargle
 
 from .config import STAR_DIRECTORY
+from .plotting import finish_figure
 from .geometry import get_nospace_star_name
 from .stats import cleaned_jds_mags
 from .lightcurve_tools import find_sampling
@@ -214,12 +215,7 @@ def plot_periodogram(star_name, sector, freq, power, ls, fap_levels=(0.1, 0.01, 
                 rotation=90, va="bottom", ha="center")
     ax.legend(loc="upper right", fontsize=7, framealpha=1)
     fig.tight_layout()
-    if out_path:
-        fig.savefig(out_path, dpi=150)
-        plt.show()
-        return out_path
-    plt.show()
-    return fig
+    return finish_figure(fig, out_path)
 
 
 def fit_multi_sine(jds, mags, frequencies):
@@ -300,9 +296,4 @@ def plot_periodogram_approximation(star_name, sector, df_lc, peaks, n_frequencie
     ax.legend(fontsize=7, framealpha=1)
     fig.tight_layout()
 
-    if out_path:
-        fig.savefig(out_path, dpi=150)
-        plt.show()
-        return out_path
-    plt.show()
-    return fig
+    return finish_figure(fig, out_path)

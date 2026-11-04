@@ -30,6 +30,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import least_squares
 
+from .plotting import finish_figure
+
 POLY_DEG = 2   # degree of the slow trend fitted together with the sinusoids
 
 
@@ -429,10 +431,7 @@ def plot_amplitude_spectrum(t, y, peaks, extra, fmax, units="mmag", zoom=None, t
         ax2.set_ylabel(f"Amplitude, {units}")
         ax2.legend(fontsize=7)
     fig.tight_layout()
-    if out_path:
-        fig.savefig(out_path, dpi=150)
-    plt.show()
-    return out_path or fig
+    return finish_figure(fig, out_path)
 
 
 def dynamic_spectrum(t, y, window=10.0, step=0.25, frange=(0.8, 2.5), df=0.004, min_fill=0.6):
@@ -474,10 +473,7 @@ def plot_dynamic_spectrum(centers, freqs, dyn, peaks=(), units="mmag", window=10
         ax.set_title(title)
     plt.colorbar(im, ax=ax, label=f"Amplitude, {units}")
     fig.tight_layout()
-    if out_path:
-        fig.savefig(out_path, dpi=150)
-    plt.show()
-    return out_path or fig
+    return finish_figure(fig, out_path)
 
 
 def frequency_stability(t, y, frequencies, window=10.0, step=1.0, min_fill=0.5):
@@ -539,10 +535,7 @@ def plot_frequency_stability(centers, amplitudes, phases, frequencies, units="mm
     if title:
         ax1.set_title(title)
     fig.tight_layout()
-    if out_path:
-        fig.savefig(out_path, dpi=150)
-    plt.show()
-    return out_path or fig
+    return finish_figure(fig, out_path)
 
 
 def plot_prewhitening_fit(t, y, peaks, units="mmag", title=None, out_path=None, figsize=(8, 3),
@@ -569,10 +562,7 @@ def plot_prewhitening_fit(t, y, peaks, units="mmag", title=None, out_path=None, 
         ax.set_title(title)
     ax.legend(fontsize=7, framealpha=1)
     fig.tight_layout()
-    if out_path:
-        fig.savefig(out_path, dpi=150)
-    plt.show()
-    return out_path or fig
+    return finish_figure(fig, out_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -644,7 +634,4 @@ def plot_clean_spectrum(freqs, dirty_amp, components, units="mmag", title=None, 
         ax.set_title(title)
     ax.legend(fontsize=7)
     fig.tight_layout()
-    if out_path:
-        fig.savefig(out_path, dpi=150)
-    plt.show()
-    return out_path or fig
+    return finish_figure(fig, out_path)

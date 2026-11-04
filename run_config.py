@@ -64,6 +64,10 @@ class RunConfig:
     dyn_step: float = 0.25
     dyn_frange: tuple = (0.8, 2.5)
     image_format: str = "png"
+    # рисунки: False -- только сохранять в файлы (пути печатаются в консоли), окна не открывать;
+    # True -- как раньше, открыть все окна в конце скрипта. Интерактивные инструменты
+    # (просмотр кадров в run.py, выбор окон в TESS_cleaning.py) окно открывают всегда.
+    show_plots: bool = False
     max_peaks_analyse: int = 10
 
     def __post_init__(self):
