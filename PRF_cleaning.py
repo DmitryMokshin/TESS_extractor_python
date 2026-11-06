@@ -41,7 +41,7 @@ PRF-режим шага 2 пайплайна: чей сигнал? Локали�
 "Правила интерпретации при тесных полях" и "Как использовать isolated/localize.py
 напрямую".
 
-Выход: out_localize/
+Выход: out_localize/{Имя_Звезды}/sector_{N}/ (CONFIG.out_dir)
     amp_maps.pdf              — карты амплитуд с положениями звёзд
     attribution.txt           — доли амплитуды по звёздам для каждой частоты
     comparison_stars.csv      — таблица происхождения сигнала (звезда x частота
@@ -57,7 +57,7 @@ PRF-режим шага 2 пайплайна: чей сигнал? Локали�
     light_curve_sector_{N}_prf_clean.csv  — тот же, плюс отбраковка шумных участков
                                              (см. п.1 выше), для быстрого CLEAN/LS
 Если RUN_DIAGNOSTICS_AFTER = True, сразу после этого разделённые кривые прогоняются через
-Peridogram_diagnostics.py (частоты, ошибки, динамический спектр) — результаты в out_tess/.
+Peridogram_diagnostics.py (частоты, ошибки, динамический спектр) — результаты в out_tess/{Имя_Звезды}/sector_{N}/.
 """
 import os
 
@@ -93,7 +93,7 @@ MERGE_PX = CONFIG.prf_merge_px   # звезды ближе MERGE_PX к боле�
 # см. ниже); задать вручную (список 1/сут), если нужны конкретные/кандидатные
 # частоты вместо автовыбора (например, чтобы воспроизвести конкретную фигуру)
 AMP_MAP_FREQS_OVERRIDE = None
-OUTDIR = "out_localize"
+OUTDIR = CONFIG.out_dir("out_localize")   # out_localize/{Имя_Звезды}/sector_{N}
 # звезды сравнения (ROADMAP.md Этап 6): сколько брать и насколько близко по T-величине
 N_COMPARISON = 5
 COMPARISON_MAG_TOL = 1.0

@@ -32,6 +32,12 @@ def main():
     assert cfg.star_dir == "stars_python/EM*_AS_14/15x15", cfg.star_dir
     print("star_dir builds the expected path for a star name with a space -- OK")
 
+    cfg = RunConfig(star_name="SS 397", sector=80)
+    assert cfg.out_dir("out_localize") == "out_localize/SS_397/sector_80", cfg.out_dir("out_localize")
+    assert cfg.out_dir("out_tess", sector=18) == "out_tess/SS_397/sector_18"
+    assert RunConfig(star_name="EM AS 14", sector=58).out_dir("out_compare") == "out_compare/EM_AS_14/sector_58"
+    print("out_dir: results go to {kind}/{Star_Name}/sector_{N} -- OK")
+
     print("\nALL CHECKS PASSED")
 
 

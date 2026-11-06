@@ -20,8 +20,8 @@ from typing import Optional
 @dataclass
 class RunConfig:
     # --- звезда / сектор / вырезка ---
-    star_name: str = "SS 397"
-    sector: int = 80
+    star_name: str = "EM AS 14"
+    sector: int = 58
     # несколько секторов (ROADMAP.md Этап 7): если задано (>=2 значений),
     # Peridogram_compute.py анализирует объединенный (склеенный) ряд вместо
     # одного `sector`; каждый сектор из списка должен уже иметь свою
@@ -84,6 +84,15 @@ class RunConfig:
         """`stars_python/{звезда}/{ширина}x{высота}/`, куда ложится всё для этой звезды/вырезки."""
         from isolated.geometry import get_nospace_star_name
         return f"stars_python/{get_nospace_star_name(self.star_name)}/{self.cut_width}x{self.cut_height}"
+
+    def out_dir(self, kind: str, sector: Optional[int] = None) -> str:
+        """
+        Папка результатов шага для этой звезды и сектора: `{kind}/{Имя_Звезды}/sector_{N}`
+        (`kind` -- "out_localize" для PRF_cleaning.py, "out_tess" для Peridogram_diagnostics.py,
+        "out_compare" для Comparison_check.py). Разные звезды и секторы не затирают друг друга.
+        """
+        from isolated.geometry import get_nospace_star_name
+        return f"{kind}/{get_nospace_star_name(self.star_name)}/sector_{self.sector if sector is None else sector}"
 
 
 CONFIG = RunConfig()
