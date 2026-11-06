@@ -59,9 +59,9 @@ RUNS = [
     (f"{STAR_DIR}/light_curve_sector_{CONFIG.sector}"
      f"{'_clean' if CONFIG.photometry_mode == 'prf' else '_prf_clean'}.csv",
      "aperture_compare" if CONFIG.photometry_mode == "prf" else "prf_compare"),
-    ("out_localize/lc_deblended_neighbour.csv", "neighbour"),
+    (os.path.join(CONFIG.out_dir("out_localize"), "lc_deblended_neighbour.csv"), "neighbour"),
 ]
-OUTDIR = "out_tess"
+OUTDIR = CONFIG.out_dir("out_tess")   # out_tess/{Имя_Звезды}/sector_{N}
 FMAX = CONFIG.prewhiten_fmax   # верхняя частота поиска, 1/сут
 N_MAX = CONFIG.n_max_freq      # максимум частот при выбеливании
 DYN_WINDOW = CONFIG.dyn_window  # окно динамического спектра, сут

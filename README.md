@@ -75,11 +75,13 @@ PyCharm кнопкой Run сохраняется: правите значени
 
 Картинки кривой блеска (`save_lc_figure`) — в `plots/png/{cut}x{cut}/`,
 видео-отрывки (`save_cutout_video`) — в `plots/videos/{cut}x{cut}/`.
-Диагностика/происхождение сигнала (`PRF_cleaning.py`) — в `out_localize/`
+Результаты шагов 2b, 4 и 5 лежат в папках звезды и сектора: `{out_localize,out_tess,out_compare}/{Имя_Звезды}/sector_{N}/`
+(путь строит `CONFIG.out_dir(...)`, поэтому разные звёзды и секторы не затирают друг друга; например
+`out_compare/EM_AS_14/sector_58/`). Диагностика/происхождение сигнала (`PRF_cleaning.py`) — в `out_localize/…`
 (`amp_maps.pdf`, `attribution.txt`, `comparison_stars.csv`/`.txt`,
 `lc_deblended_<id>.csv`, `lc_deblended.pdf`). Углублённый частотный анализ
-(`Peridogram_diagnostics.py`) — в `out_tess/`. Проверка окружения
-(`Comparison_check.py`) — в `out_compare/`.
+(`Peridogram_diagnostics.py`) — в `out_tess/…`. Проверка окружения
+(`Comparison_check.py`) — в `out_compare/…`.
 
 ## Порядок запуска
 
@@ -315,7 +317,7 @@ PRF-режиме; предупреждение, если доля меньше 0
 - LaTeX-фрагмент таблицы частот (`{tag}_freqs.tex`) — готов для вставки в
   текст.
 
-Результаты — в `out_tess/`.
+Результаты — в `out_tess/{Имя_Звезды}/sector_{N}/`.
 
 ### 5. [`Comparison_check.py`](Comparison_check.py) — проверка окружения: соседи и стандарты
 
@@ -342,7 +344,7 @@ PRF-деблендинг, что в `PRF_cleaning.py`, но кривые стр�
 кортежем). Для соседей и стандартов дополнительно полный прогон
 `Peridogram_diagnostics.analyse` (`RUN_FULL_DIAGNOSTICS`).
 
-Файлы в `out_compare/`: `comparison_summary.txt` (главное),
+Файлы в `out_compare/{Имя_Звезды}/sector_{N}/`: `comparison_summary.txt` (главное),
 `comparison_variability.csv` (одна строка на звезду),
 `comparison_fixed_freqs.csv` (амплитуды/S/N на частотах цели),
 `comparison_dynamic_p<k>.pdf` (кривая + амплитудный + динамический спектр,
@@ -389,6 +391,12 @@ PRF-деблендинг, что в `PRF_cleaning.py`, но кривые стр�
 
 ## Остальное
 
+- Имя звезды ищется в Simbad: если `"EM AS 14"` не найдено, автоматически
+  пробуются написания `"EM* AS 14"`, `"V* EM AS 14"`, `"* EM AS 14"`; если
+  Simbad не знает звезду, ошибка подскажет написать имя так, как оно в
+  Simbad. Если основной сервер Simbad (Страсбург) не отвечает, запрос
+  идёт на зеркало (Гарвард); при перегрузке серверов Gaia (503) запрос
+  повторяется. Всё это в `isolated/databases.py`.
 - Все функции из `isolated/` документированы докстрингами — при
   сомнениях в параметрах смотрите их напрямую в коде модуля.
 - `isolated/provenance.py` — шапки-провенанс для выходных файлов (см.

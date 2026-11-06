@@ -21,7 +21,7 @@ from tqdm.auto import tqdm
 
 from .config import STAR_DIRECTORY, TESS_MAX_SECTORS
 from .geometry import get_nospace_star_name, get_rel_radec, get_distance, calc_tess_magnitude
-from .fits_utils import get_tesscut_corners
+from .fits_utils import get_tesscut_corners, get_reference_px, get_reference_radec, get_px_to_radec_matrix
 from .databases import get_star_gaia_data
 from .tess_queries import get_tess_cutouts as _download_tess_cutouts
 from .databases import _run_query, _gaia as _gaia_tap
@@ -346,11 +346,9 @@ def load_gaia_stars_in_view_data(star_name, cut_fits, d_mag_r=5.0, rewrite_file=
                 if numeric_col in data.columns:
                     data[numeric_col] = pd.to_numeric(data[numeric_col], errors="coerce")
 
-        header2 = cut_fits[1].header
-        reference_px = np.array([header2["1CRPX4"], header2["2CRPX4"]])
-        reference_radec = np.array([header2["1CRVL4"], header2["2CRVL4"]])
-        conv_px_to_radec = np.array([[header2["11PC4"], header2["12PC4"]],
-                                      [header2["21PC4"], header2["22PC4"]]])
+        reference_px = get_reference_px(cut_fits)
+        reference_radec = get_reference_radec(cut_fits)
+        conv_px_to_radec = get_px_to_radec_matrix(cut_fits)
         conv_radec_to_px = np.linalg.inv(conv_px_to_radec)
 
         stars_x = np.zeros(len(data))

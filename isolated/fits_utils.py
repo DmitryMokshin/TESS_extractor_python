@@ -13,25 +13,40 @@ import numpy as np
 from .geometry import get_true_radec
 
 
-def get_px_to_radec_matrix(cut_fits):
-    """Direct port of `get_px_to_radec_matrix` (extension index 2, 1-based -> 1 here)."""
+def _wcs_keyword(cut_fits, pixels_key, aperture_key):
+    """
+    One cutout-WCS keyword. Newer TESScut files carry it in the PIXELS extension
+    (e.g. `1CRPX4`, python `cut_fits[1]`; Julia `fits[2]`); older products (e.g.
+    sector 18) don't have those, but always have the very same WCS (identical
+    values wherever both exist) in the APERTURE extension (`CRPIX1`, ...,
+    `cut_fits[2]`) -- used only when the PIXELS one is absent.
+    """
     hdr = cut_fits[1].header  # Julia fits[2] == python cut_fits[1] (0-based HDU list)
+    if pixels_key in hdr:
+        return hdr[pixels_key]
+    try:
+        return cut_fits[2].header[aperture_key]
+    except (IndexError, KeyError):
+        raise KeyError(f"cutout has neither {pixels_key!r} in the PIXELS header nor {aperture_key!r} "
+                       f"in the APERTURE header -- can't locate it on the sky") from None
+
+
+def get_px_to_radec_matrix(cut_fits):
+    """Direct port of `get_px_to_radec_matrix` (APERTURE-header fallback for older cutouts)."""
     return np.array([
-        [hdr["11PC4"], hdr["12PC4"]],
-        [hdr["21PC4"], hdr["22PC4"]],
+        [_wcs_keyword(cut_fits, "11PC4", "PC1_1"), _wcs_keyword(cut_fits, "12PC4", "PC1_2")],
+        [_wcs_keyword(cut_fits, "21PC4", "PC2_1"), _wcs_keyword(cut_fits, "22PC4", "PC2_2")],
     ])
 
 
 def get_reference_radec(cut_fits):
-    """Direct port of `get_reference_radec`."""
-    hdr = cut_fits[1].header
-    return np.array([hdr["1CRVL4"], hdr["2CRVL4"]])
+    """Direct port of `get_reference_radec` (APERTURE-header fallback for older cutouts)."""
+    return np.array([_wcs_keyword(cut_fits, "1CRVL4", "CRVAL1"), _wcs_keyword(cut_fits, "2CRVL4", "CRVAL2")])
 
 
 def get_reference_px(cut_fits):
-    """Direct port of `get_reference_px`."""
-    hdr = cut_fits[1].header
-    return np.array([hdr["1CRPX4"], hdr["2CRPX4"]])
+    """Direct port of `get_reference_px` (APERTURE-header fallback for older cutouts)."""
+    return np.array([_wcs_keyword(cut_fits, "1CRPX4", "CRPIX1"), _wcs_keyword(cut_fits, "2CRPX4", "CRPIX2")])
 
 
 def get_tesscut_corners(cut_fits):

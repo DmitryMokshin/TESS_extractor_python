@@ -35,7 +35,7 @@
      Peridogram_diagnostics.analyse (отчет, CLEAN, стабильность амплитуд/фаз),
      чтобы все звезды были обработаны тем же методом, что цель.
 
-Выход (OUTDIR):
+Выход (OUTDIR = out_compare/{Имя_Звезды}/sector_{N}/, CONFIG.out_dir):
   lc_nbr_<id>.csv, lc_comp_<id>.csv -- PRF-кривые соседей / стандартов (BTJD, FRAME, FLUX)
   comparison_summary.txt            -- сводка (ее и присылать)
   comparison_fixed_freqs.csv        -- амплитуды/S/N на частотах цели по всем звездам
@@ -104,7 +104,7 @@ BIN_DAYS = 0.25        # бин для RMS_BINNED_PPT, сут
 PLOT_FMAX = 6.0        # верх оси частот на амплитудных спектрах
 ROWS_PER_FIGURE = 5    # звезд на одной странице рисунка
 RUN_FULL_DIAGNOSTICS = True      # стандартный Peridogram_diagnostics.analyse для соседей и стандартов
-OUTDIR = "out_compare"
+OUTDIR = CONFIG.out_dir("out_compare")   # out_compare/{Имя_Звезды}/sector_{N}
 SHOW_PLOTS = CONFIG.show_plots   # False: рисунки только сохраняются, пути -- в консоли (run_config.py)
 
 

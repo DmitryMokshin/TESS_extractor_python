@@ -10,26 +10,119 @@ essentially verbatim.
 from __future__ import annotations
 
 import re
+import socket
+import time
 import warnings
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
+import requests
 from astroquery.utils.tap.core import TapPlus
 
 from .progress import heartbeat
 
-SIMBAD_TAP_URL = "https://simbad.cds.unistra.fr/simbad/sim-tap"
+# Simbad lives on two mirrors (CDS Strasbourg and CfA Harvard) with the same
+# content; if the first one doesn't answer (a blocked route or an outage looks
+# like a bare TCP "Connection timed out" after minutes), the second is used.
+SIMBAD_TAP_URLS = ["https://simbad.cds.unistra.fr/simbad/sim-tap",
+                   "https://simbad.cfa.harvard.edu/simbad/sim-tap"]
+SIMBAD_TAP_URL = SIMBAD_TAP_URLS[0]
 GAIA_TAP_URL = "https://gea.esac.esa.int/tap-server/tap"
+CONNECT_PROBE_TIMEOUT = 8.0   # seconds to wait for a TCP connection to a mirror before trying the next one
 
 _simbad_tap = None
+_simbad_url = None
+_simbad_bad_urls: set[str] = set()
 _gaia_tap = None
 
 
+def _reachable(url: str, timeout: float = CONNECT_PROBE_TIMEOUT) -> bool:
+    """Can a TCP connection to the URL's host be opened within `timeout` seconds?"""
+    parsed = urlparse(url)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _simbad() -> TapPlus:
-    global _simbad_tap
+    """TAP client for the first Simbad mirror that accepts connections (chosen once, then cached)."""
+    global _simbad_tap, _simbad_url
     if _simbad_tap is None:
-        _simbad_tap = TapPlus(url=SIMBAD_TAP_URL)
+        for url in SIMBAD_TAP_URLS:
+            if url in _simbad_bad_urls:
+                continue
+            if _reachable(url):
+                _simbad_tap, _simbad_url = TapPlus(url=url), url
+                break
+            _simbad_bad_urls.add(url)
+            print(f"Simbad: {url} не отвечает, пробую следующее зеркало")
+        else:
+            _simbad_bad_urls.clear()
+            raise ConnectionError(
+                "Simbad недоступен ни на одном зеркале (" + ", ".join(SIMBAD_TAP_URLS) + "): проверьте "
+                "интернет/прокси/VPN. Если звезда уже скачивалась раньше, её Gaia-данные берутся из кэша "
+                "stars_python/ без обращения к Simbad.")
     return _simbad_tap
+
+
+def _run_simbad(adql: str, desc: str = "Querying Simbad", async_query: bool = False) -> pd.DataFrame:
+    """`_run_query` against Simbad with mirror failover: if the chosen mirror drops the connection
+    mid-session, it is marked bad and the query is repeated on the next mirror."""
+    global _simbad_tap
+    last_exc = None
+    for _ in range(len(SIMBAD_TAP_URLS)):
+        tap = _simbad()
+        try:
+            return _run_query(tap, adql, desc=desc, async_query=async_query)
+        except (OSError, TimeoutError) as exc:   # ConnectionError/TimeoutError are OSError subclasses
+            last_exc = exc
+            _simbad_bad_urls.add(_simbad_url)
+            _simbad_tap = None
+            print(f"Simbad: обрыв соединения ({exc}), пробую следующее зеркало")
+    raise ConnectionError(f"Simbad не ответил ни на одном зеркале: {last_exc}")
+
+
+def _simbad_name_candidates(star_name: str) -> list[str]:
+    """
+    Spellings of `star_name` Simbad might know it under, as-given first. Simbad
+    writes many catalogue names with a star after the acronym ("EM* AS 14",
+    "V* RW Aur", "* alf Ori"), which plain "EM AS 14" doesn't match.
+    """
+    name = " ".join(star_name.split())
+    candidates = [name]
+    head, _, rest = name.partition(" ")
+    if rest and not head.endswith("*"):
+        candidates += [f"{head}* {rest}", f"V* {name}", f"* {name}"]
+    return list(dict.fromkeys(candidates))
+
+
+def _simbad_ident_df(columns: str, joins: str, star_name: str) -> pd.DataFrame:
+    """
+    Rows of Simbad's `ident` (+ `joins`) for `star_name`, trying the spellings of
+    `_simbad_name_candidates` in ONE query; rows for the spelling closest to what
+    the caller typed come first. Raises ValueError (not an obscure IndexError
+    later) if Simbad knows none of them.
+    """
+    candidates = _simbad_name_candidates(star_name)
+    in_list = ", ".join("'" + c.replace("'", "''") + "'" for c in candidates)
+    df = _run_simbad(f"""select top 20 {columns}, ident.id as matched_id
+    FROM ident
+    {joins}
+    where ident.id in ({in_list})""")
+
+    def norm(s):
+        return re.sub(r"\s+", "", str(s)).lower()
+
+    if df.empty:
+        raise ValueError(f"Simbad не знает звезду '{star_name}' (пробовал: {', '.join(candidates)}). Укажите имя "
+                         f"так, как оно записано в Simbad (например 'EM* AS 14', 'V* RW Aur', 'TIC 12345').")
+    rank = {norm(c): i for i, c in enumerate(candidates)}
+    df = df.assign(_rank=df["matched_id"].map(lambda v: rank.get(norm(v), len(candidates))))
+    return df.sort_values("_rank", kind="stable").drop(columns="_rank").reset_index(drop=True)
 
 
 def _gaia() -> TapPlus:
@@ -37,6 +130,31 @@ def _gaia() -> TapPlus:
     if _gaia_tap is None:
         _gaia_tap = TapPlus(url=GAIA_TAP_URL)
     return _gaia_tap
+
+
+RETRY_DELAYS = (0, 5, 15)   # seconds before each attempt when a TAP server answers "busy"
+_BUSY_CODES = ("502", "503", "504")
+
+
+def _launch_job(tap: TapPlus, adql: str, async_query: bool):
+    """
+    `launch_job`/`launch_job_async`, retried when the server answers 502/503/504
+    (e.g. Gaia's "synchronous job rejected: maximum number of synchronous
+    queued jobs reached", a transient overload on the server's side). After a
+    busy answer the job is submitted as ASYNC, which has its own queue.
+    """
+    for attempt, delay in enumerate(RETRY_DELAYS):
+        if delay:
+            time.sleep(delay)
+        try:
+            return tap.launch_job_async(adql) if async_query else tap.launch_job(adql)
+        except requests.exceptions.HTTPError as exc:
+            busy = any(f"Error {code}" in str(exc) for code in _BUSY_CODES)
+            if not busy or attempt == len(RETRY_DELAYS) - 1:
+                raise
+            print(f"TAP-сервер перегружен ({str(exc).splitlines()[0]}), повторяю через "
+                  f"{RETRY_DELAYS[attempt + 1]} с (async-режим)")
+            async_query = True
 
 
 def _run_query(tap: TapPlus, adql: str, desc: str = "Querying TAP service", async_query: bool = False) -> pd.DataFrame:
@@ -61,7 +179,7 @@ def _run_query(tap: TapPlus, adql: str, desc: str = "Querying TAP service", asyn
     field-star query does.
     """
     with heartbeat(desc):
-        job = tap.launch_job_async(adql) if async_query else tap.launch_job(adql)
+        job = _launch_job(tap, adql, async_query)
         table = job.get_results()
     df = table.to_pandas()
     df.columns = [str(c).lower() for c in df.columns]
@@ -84,11 +202,8 @@ def _run_query(tap: TapPlus, adql: str, desc: str = "Querying TAP service", asyn
 
 def get_star_gaia_data(star_name: str, gaia: str = "dr3") -> pd.Series:
     """Direct port of `get_star_gaia_data`."""
-    df_simbad = _run_query(_simbad(), f"""select top 5 oid, main_id, ids
-    FROM ident
-    JOIN basic ON ident.oidref = basic.oid
-    JOIN ids on ident.oidref = ids.oidref
-    where id = '{star_name}'""")
+    df_simbad = _simbad_ident_df("oid, main_id, ids", """JOIN basic ON ident.oidref = basic.oid
+    JOIN ids on ident.oidref = ids.oidref""", star_name)
 
     gaia_regex = re.compile(rf"gaia {gaia} (?P<id>[0-9]+)", re.IGNORECASE)
     match = gaia_regex.search(df_simbad["ids"].iloc[0])
@@ -102,18 +217,14 @@ def get_star_gaia_data(star_name: str, gaia: str = "dr3") -> pd.Series:
 
 def get_star_coords(star_name: str):
     """Direct port of `get_star_coords`."""
-    df_simbad = _run_query(_simbad(),
-                            f"select top 5 * FROM ident JOIN basic ON ident.oidref = basic.oid where id = '{star_name}'")
+    df_simbad = _simbad_ident_df("ra, dec", "JOIN basic ON ident.oidref = basic.oid", star_name)
     return float(df_simbad["ra"].iloc[0]), float(df_simbad["dec"].iloc[0])
 
 
 def get_star_coords_gaia(star_name: str, gaia: str = "dr3"):
     """Direct port of `get_star_coords_gaia`."""
-    df_simbad = _run_query(_simbad(), f"""select top 5 oid, main_id, ids
-    FROM ident
-    JOIN basic ON ident.oidref = basic.oid
-    JOIN ids on ident.oidref = ids.oidref
-    where id = '{star_name}'""")
+    df_simbad = _simbad_ident_df("oid, main_id, ids", """JOIN basic ON ident.oidref = basic.oid
+    JOIN ids on ident.oidref = ids.oidref""", star_name)
 
     gaia_regex = re.compile(rf"gaia {gaia} (?P<id>[0-9]+)", re.IGNORECASE)
     match = gaia_regex.search(df_simbad["ids"].iloc[0])
@@ -180,7 +291,7 @@ def check_star_isolation_by_radec(star_ra: float, star_dec: float, box_width: fl
 
 def get_simbad_young_stars(mag_min: float, mag_max: float) -> pd.DataFrame:
     """Direct port of `get_simbad_young_stars`."""
-    df_simbad_sp = _run_query(_simbad(), f"""select oid, otype, main_id, ra, dec, sptype, V, R, "year",  ids
+    df_simbad_sp = _run_simbad(f"""select oid, otype, main_id, ra, dec, sptype, V, R, "year",  ids
 from basic
 join allfluxes on oid = allfluxes.oidref
 join ids on oid = ids.oidref
